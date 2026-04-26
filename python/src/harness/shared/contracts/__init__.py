@@ -1,0 +1,1 @@
+"""Shared harness contract types."""
