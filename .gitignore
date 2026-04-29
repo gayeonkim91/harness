@@ -6,9 +6,6 @@ __pycache__/
 .pytest_cache/
 
 # Test source and generated test artifacts
-python/tests/
-tests/
-test/
 test-results/
 coverage/
 htmlcov/
