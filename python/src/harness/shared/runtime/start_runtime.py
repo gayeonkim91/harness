@@ -3,10 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
 from pathlib import Path
 from typing import Any
-from zoneinfo import ZoneInfo
 
 from harness.shared.contracts.profile import ReadTargetKind, RepoProfile, SelectorType, TypedReadEntry
 from harness.shared.contracts.state import CurrentPhase, HarnessCounters, HarnessState, SessionState, WorkflowMode
@@ -19,6 +17,7 @@ from harness.shared.artifacts.steps_artifact import scaffold_steps
 from harness.shared.core.snapshot_helper import capture_workspace_baseline
 from harness.shared.core.start_mode_resolver import StartModeResolverInput, resolve_start_mode
 from harness.shared.core.task_paths import get_task_paths
+from harness.shared.core.timestamp import kst_now_human
 
 
 @dataclass(slots=True)
@@ -51,7 +50,7 @@ class StartRuntimeInput:
 
 
 def _kst_timestamp() -> str:
-    return datetime.now(ZoneInfo("Asia/Seoul")).isoformat(timespec="seconds")
+    return kst_now_human()
 
 
 def _normalize_read_entry(entry: TypedReadEntry | dict[str, Any]) -> TypedReadEntry:
@@ -202,8 +201,8 @@ def execute_start_runtime(input_data: StartRuntimeInput) -> dict[str, object]:
     except OSError:
         return _blocked_start_output("START_TASK_ROOT_UNWRITABLE")
     initial_state = HarnessState(
-        schema_version=1,
-        session_state=SessionState.ACTIVE,
+        schema_version=2,
+        session_state=SessionState.IN_PROGRESS,
         workflow_mode=input_data.workflow_mode,
         current_phase=input_data.initial_phase,
         repo_profile_ref=input_data.repo_profile_ref,

@@ -373,8 +373,8 @@ def test_execute_start_runtime_writes_canonical_initial_state(tmp_path: Path) ->
 
     state = json.loads((task_root / "state.json").read_text(encoding="utf-8"))
     assert result["reason_code"] is None
-    assert state["schema_version"] == 1
-    assert state["session_state"] == "active"
+    assert state["schema_version"] == 2
+    assert state["session_state"] == "in_progress"
     assert state["workflow_mode"] == "generic"
     assert state["current_phase"] == "plan"
     assert state["repo_profile_ref"] is None
@@ -391,5 +391,5 @@ def test_execute_start_runtime_writes_canonical_initial_state(tmp_path: Path) ->
     assert state["blocked_transition"] is None
     assert state["blocked_reason_ref"] is None
     assert state["stop_condition_ref"] is None
-    assert state["last_updated"].endswith("+09:00")
+    assert state["last_updated"].endswith(" KST")
     assert state["adapter_meta"] == {}

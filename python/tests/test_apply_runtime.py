@@ -462,7 +462,7 @@ def test_runtime_cli_serializes_apply_result(monkeypatch, capsys, tmp_path: Path
         ],
         "routing_basis_ref": "logs/checkpoints/checkpoint.json",
         "deferred_state_transition": {
-            "session_state": "active",
+            "session_state": "in_progress",
             "current_phase": "plan",
             "pending_approval_for": None,
             "review_outcome": None,

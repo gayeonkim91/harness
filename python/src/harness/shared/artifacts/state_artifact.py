@@ -4,10 +4,8 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict
-from datetime import datetime
 from pathlib import Path
 from typing import Any
-from zoneinfo import ZoneInfo
 
 from harness.shared.contracts.results import ApplyResult, ApplyStatus
 from harness.shared.contracts.state import (
@@ -19,6 +17,8 @@ from harness.shared.contracts.state import (
     SessionState,
     WorkflowMode,
 )
+from harness.shared.core.state_migration import CURRENT_SCHEMA_VERSION, migrate_state_file
+from harness.shared.core.timestamp import kst_now_human
 
 
 def _normalize_path(state_path: str | Path) -> Path:
@@ -26,7 +26,7 @@ def _normalize_path(state_path: str | Path) -> Path:
 
 
 def _kst_timestamp() -> str:
-    return datetime.now(ZoneInfo("Asia/Seoul")).isoformat(timespec="seconds")
+    return kst_now_human()
 
 
 def _resolve_current_step_ref(
@@ -96,9 +96,17 @@ def _payload_to_state(payload: dict[str, Any]) -> HarnessState:
 
 
 def read_state(state_path: str | Path) -> HarnessState:
-    """Read the canonical workflow state."""
+    """Read the canonical workflow state.
+
+    Auto-migrates a v1 state.json on first read so callers never see legacy
+    tokens like ``"active"``. The migration is idempotent and writes a backup
+    before rewriting (see :mod:`harness.shared.core.state_migration`).
+    """
     path = _normalize_path(state_path)
     payload = json.loads(path.read_text(encoding="utf-8"))
+    if int(payload.get("schema_version", 0)) < CURRENT_SCHEMA_VERSION:
+        migrate_state_file(path)
+        payload = json.loads(path.read_text(encoding="utf-8"))
     return _payload_to_state(payload)
 
 

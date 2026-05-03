@@ -10,10 +10,13 @@ from typing import Any
 class SessionState(str, Enum):
     """Allowed runtime session states."""
 
-    ACTIVE = "active"
+    DRAFT = "draft"
+    IN_PROGRESS = "in_progress"
     AWAITING_APPROVAL = "awaiting_approval"
     PAUSED = "paused"
     DONE = "done"
+    # Code-internal alias retained while in-flight callers migrate; serialized as "in_progress".
+    ACTIVE = "in_progress"
 
 
 class WorkflowMode(str, Enum):

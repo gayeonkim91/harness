@@ -3,17 +3,16 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
 from harness.shared.artifacts.logs_artifact import log_ref_for_path, reserve_log_path
 from harness.shared.artifacts.state_artifact import read_state, write_state
 from harness.shared.contracts.state import CurrentPhase, HarnessState
+from harness.shared.core.timestamp import kst_now_human, kst_now_iso
 
 
 def _kst_timestamp() -> str:
-    return datetime.now(ZoneInfo("Asia/Seoul")).isoformat(timespec="seconds")
+    return kst_now_iso()
 
 
 def record_state_update_recovery(
@@ -117,7 +116,7 @@ def _state_with_adopted_result(state: HarnessState, pointer_field: str, adopted_
         blocked_transition=blocked_transition,
         blocked_reason_ref=blocked_reason_ref,
         stop_condition_ref=state.stop_condition_ref,
-        last_updated=_kst_timestamp(),
+        last_updated=kst_now_human(),
         adapter_meta=state.adapter_meta,
     )
 

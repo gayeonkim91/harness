@@ -17,6 +17,7 @@ from harness.shared.core.guard_executor import GuardInput, run_guard
 from harness.shared.core.json_util import to_jsonable
 from harness.shared.core.phase_spec_loader import PhaseSpec, PhaseSpecLoadError, load_phase_spec, resolve_workspace_root
 from harness.shared.core.task_paths import get_task_paths
+from harness.shared.core.timestamp import kst_now_human, kst_now_iso
 
 
 FAILURE_JUDGEMENTS = {
@@ -131,10 +132,7 @@ def persist_verify_runtime(input_data: VerifyRuntimeInput) -> dict[str, object]:
 
 
 def _kst_timestamp() -> str:
-    from datetime import datetime
-    from zoneinfo import ZoneInfo
-
-    return datetime.now(ZoneInfo("Asia/Seoul")).isoformat(timespec="seconds")
+    return kst_now_iso()
 
 
 def _blocked_verify_output(reason_code: str, message_summary: str | None = None) -> dict[str, object]:
@@ -198,7 +196,7 @@ def _with_latest_verification_ref(state: HarnessState, verification_ref: str) ->
         blocked_transition=blocked_transition,
         blocked_reason_ref=blocked_reason_ref,
         stop_condition_ref=state.stop_condition_ref,
-        last_updated=_kst_timestamp(),
+        last_updated=kst_now_human(),
         adapter_meta=state.adapter_meta,
     )
 
@@ -222,7 +220,7 @@ def _with_verify_state_update_blocked_state(state: HarnessState, verification_re
         blocked_transition="verify_state_update",
         blocked_reason_ref=verification_ref,
         stop_condition_ref=state.stop_condition_ref,
-        last_updated=_kst_timestamp(),
+        last_updated=kst_now_human(),
         adapter_meta=state.adapter_meta,
     )
 

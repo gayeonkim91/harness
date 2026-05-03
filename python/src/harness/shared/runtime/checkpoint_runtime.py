@@ -4,10 +4,8 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict, dataclass
-from datetime import datetime
 from pathlib import Path
 from typing import Any
-from zoneinfo import ZoneInfo
 
 from harness.shared.artifacts.logs_artifact import log_ref_for_path, reserve_log_path
 from harness.shared.artifacts.state_artifact import read_state, write_state
@@ -18,6 +16,7 @@ from harness.shared.contracts.state import CurrentPhase, HarnessState
 from harness.shared.core.guard_executor import GuardInput, run_guard
 from harness.shared.core.phase_spec_loader import PhaseSpec, PhaseSpecLoadError, load_phase_spec, resolve_workspace_root
 from harness.shared.core.task_paths import get_task_paths
+from harness.shared.core.timestamp import kst_now_human, kst_now_iso
 
 
 CAUSE_REQUIRED_JUDGEMENTS = {
@@ -48,7 +47,7 @@ class CheckpointRuntimeInput:
 
 
 def _kst_timestamp() -> str:
-    return datetime.now(ZoneInfo("Asia/Seoul")).isoformat(timespec="seconds")
+    return kst_now_iso()
 
 
 def _checkpoint_result_from_payload(payload: dict[str, Any]) -> CheckpointResult:
@@ -149,7 +148,7 @@ def _with_latest_checkpoint_ref(state: HarnessState, checkpoint_ref: str) -> Har
         blocked_transition=state.blocked_transition,
         blocked_reason_ref=state.blocked_reason_ref,
         stop_condition_ref=state.stop_condition_ref,
-        last_updated=_kst_timestamp(),
+        last_updated=kst_now_human(),
         adapter_meta=state.adapter_meta,
     )
 
