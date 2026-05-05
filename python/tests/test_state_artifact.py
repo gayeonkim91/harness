@@ -25,7 +25,7 @@ def test_apply_deferred_transition_sets_current_step_ref_from_apply_result(tmp_p
         state_path,
         HarnessState(
             schema_version=1,
-            session_state=SessionState.ACTIVE,
+            session_state=SessionState.IN_PROGRESS,
             workflow_mode=WorkflowMode.GENERIC,
             current_phase=CurrentPhase.IMPLEMENTATION,
             repo_profile_ref=None,
@@ -49,7 +49,7 @@ def test_apply_deferred_transition_sets_current_step_ref_from_apply_result(tmp_p
     apply_deferred_transition_with_apply_result(
         state_path,
         DeferredStateTransition(
-            session_state=SessionState.ACTIVE,
+            session_state=SessionState.IN_PROGRESS,
             current_phase=CurrentPhase.IMPLEMENTATION,
             pending_approval_for=None,
             review_outcome=None,
@@ -75,7 +75,7 @@ def test_apply_deferred_transition_applies_noop_result(tmp_path: Path) -> None:
         state_path,
         HarnessState(
             schema_version=1,
-            session_state=SessionState.ACTIVE,
+            session_state=SessionState.IN_PROGRESS,
             workflow_mode=WorkflowMode.GENERIC,
             current_phase=CurrentPhase.IMPLEMENTATION,
             repo_profile_ref=None,
@@ -99,9 +99,9 @@ def test_apply_deferred_transition_applies_noop_result(tmp_path: Path) -> None:
     apply_deferred_transition_with_apply_result(
         state_path,
         DeferredStateTransition(
-            session_state=SessionState.ACTIVE,
+            session_state=SessionState.IN_PROGRESS,
             current_phase=CurrentPhase.VERIFICATION,
-            pending_approval_for="verification_entry",
+            pending_approval_for=None,
             review_outcome=None,
             closure_authorized=False,
             counters=HarnessCounters(),
@@ -116,7 +116,7 @@ def test_apply_deferred_transition_applies_noop_result(tmp_path: Path) -> None:
 
     state = read_state(state_path)
     assert state.current_phase == CurrentPhase.VERIFICATION
-    assert state.pending_approval_for == "verification_entry"
+    assert state.pending_approval_for is None
     assert state.current_step_ref is None
 
 
@@ -126,7 +126,7 @@ def test_apply_deferred_transition_ignores_set_for_non_step_phase(tmp_path: Path
         state_path,
         HarnessState(
             schema_version=1,
-            session_state=SessionState.ACTIVE,
+            session_state=SessionState.IN_PROGRESS,
             workflow_mode=WorkflowMode.GENERIC,
             current_phase=CurrentPhase.IMPLEMENTATION,
             repo_profile_ref=None,
@@ -150,9 +150,9 @@ def test_apply_deferred_transition_ignores_set_for_non_step_phase(tmp_path: Path
     apply_deferred_transition_with_apply_result(
         state_path,
         DeferredStateTransition(
-            session_state=SessionState.AWAITING_APPROVAL,
+            session_state=SessionState.IN_PROGRESS,
             current_phase=CurrentPhase.VERIFICATION,
-            pending_approval_for="verification_entry",
+            pending_approval_for=None,
             review_outcome=None,
             closure_authorized=False,
             counters=HarnessCounters(),
@@ -176,7 +176,7 @@ def test_apply_immediate_transition_clears_current_step_ref_for_non_step_phases(
         state_path,
         HarnessState(
             schema_version=1,
-            session_state=SessionState.ACTIVE,
+            session_state=SessionState.IN_PROGRESS,
             workflow_mode=WorkflowMode.GUIDED,
             current_phase=CurrentPhase.IMPLEMENTATION,
             repo_profile_ref=None,
@@ -200,7 +200,7 @@ def test_apply_immediate_transition_clears_current_step_ref_for_non_step_phases(
     apply_immediate_transition(
         state_path,
         DeferredStateTransition(
-            session_state=SessionState.ACTIVE,
+            session_state=SessionState.IN_PROGRESS,
             current_phase=CurrentPhase.REVIEW,
             pending_approval_for=None,
             review_outcome=None,

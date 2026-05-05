@@ -197,6 +197,7 @@ def _with_latest_verification_ref(state: HarnessState, verification_ref: str) ->
         blocked_reason_ref=blocked_reason_ref,
         stop_condition_ref=state.stop_condition_ref,
         last_updated=kst_now_human(),
+        approvals_granted=state.approvals_granted,
         adapter_meta=state.adapter_meta,
     )
 
@@ -221,6 +222,7 @@ def _with_verify_state_update_blocked_state(state: HarnessState, verification_re
         blocked_reason_ref=verification_ref,
         stop_condition_ref=state.stop_condition_ref,
         last_updated=kst_now_human(),
+        approvals_granted=state.approvals_granted,
         adapter_meta=state.adapter_meta,
     )
 

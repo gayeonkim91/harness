@@ -72,6 +72,8 @@ def _payload_to_state(payload: dict[str, Any]) -> HarnessState:
         rewrite_count=int(counters_payload.get("rewrite_count", 0)),
         rollback_count=int(counters_payload.get("rollback_count", 0)),
     )
+    approvals_payload = payload.get("approvals_granted", [])
+    approvals_granted = [] if approvals_payload is None else [int(item) for item in approvals_payload]
     return HarnessState(
         schema_version=int(payload["schema_version"]),
         session_state=SessionState(payload["session_state"]),
@@ -91,6 +93,7 @@ def _payload_to_state(payload: dict[str, Any]) -> HarnessState:
         blocked_reason_ref=payload.get("blocked_reason_ref"),
         stop_condition_ref=payload.get("stop_condition_ref"),
         last_updated=str(payload["last_updated"]),
+        approvals_granted=approvals_granted,
         adapter_meta=dict(payload.get("adapter_meta", {})),
     )
 
@@ -98,15 +101,17 @@ def _payload_to_state(payload: dict[str, Any]) -> HarnessState:
 def read_state(state_path: str | Path) -> HarnessState:
     """Read the canonical workflow state.
 
-    Auto-migrates a v1 state.json on first read so callers never see legacy
-    tokens like ``"active"``. The migration is idempotent and writes a backup
-    before rewriting (see :mod:`harness.shared.core.state_migration`).
+    Auto-migrates or repairs state.json on first read so callers never see
+    legacy tokens like ``"active"`` or ``"verification_entry"``. The migration
+    is idempotent and writes a backup before rewriting (see
+    :mod:`harness.shared.core.state_migration`).
     """
     path = _normalize_path(state_path)
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    if int(payload.get("schema_version", 0)) < CURRENT_SCHEMA_VERSION:
-        migrate_state_file(path)
+    migration = migrate_state_file(path)
+    if migration.payload is None:
         payload = json.loads(path.read_text(encoding="utf-8"))
+    else:
+        payload = migration.payload
     return _payload_to_state(payload)
 
 
@@ -125,6 +130,7 @@ def write_initial_state(state_path: str | Path, state: HarnessState) -> None:
 def apply_immediate_transition(state_path: str | Path, transition: DeferredStateTransition) -> None:
     """Apply an immediate transition without /wf-apply mediation."""
     state = read_state(state_path)
+    approvals_granted = transition.approvals_granted if transition.approvals_granted is not None else state.approvals_granted
     updated = HarnessState(
         schema_version=state.schema_version,
         session_state=transition.session_state,
@@ -148,6 +154,7 @@ def apply_immediate_transition(state_path: str | Path, transition: DeferredState
         blocked_reason_ref=transition.blocked_reason_ref,
         stop_condition_ref=transition.stop_condition_ref,
         last_updated=_kst_timestamp(),
+        approvals_granted=approvals_granted,
         adapter_meta=state.adapter_meta,
     )
     write_state(state_path, updated)
@@ -163,6 +170,7 @@ def apply_deferred_transition_with_apply_result(
         return
 
     state = read_state(state_path)
+    approvals_granted = transition.approvals_granted if transition.approvals_granted is not None else state.approvals_granted
     current_step_ref = _resolve_current_step_ref(
         state.current_step_ref,
         transition.current_phase,
@@ -195,6 +203,7 @@ def apply_deferred_transition_with_apply_result(
         blocked_reason_ref=transition.blocked_reason_ref,
         stop_condition_ref=transition.stop_condition_ref,
         last_updated=_kst_timestamp(),
+        approvals_granted=approvals_granted,
         adapter_meta=state.adapter_meta,
     )
     write_state(state_path, updated)

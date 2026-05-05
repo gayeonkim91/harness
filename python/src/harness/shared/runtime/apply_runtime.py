@@ -190,6 +190,7 @@ def _normalize_action_params(params: dict[str, Any]) -> dict[str, Any]:
 
 def _normalize_transition(payload: dict[str, Any]) -> DeferredStateTransition:
     counters_payload = payload.get("counters", {})
+    approvals_payload = payload.get("approvals_granted") if "approvals_granted" in payload else None
     return DeferredStateTransition(
         session_state=SessionState(payload["session_state"]),
         current_phase=CurrentPhase(payload["current_phase"]),
@@ -204,6 +205,7 @@ def _normalize_transition(payload: dict[str, Any]) -> DeferredStateTransition:
         blocked_transition=payload.get("blocked_transition"),
         blocked_reason_ref=payload.get("blocked_reason_ref"),
         stop_condition_ref=payload.get("stop_condition_ref"),
+        approvals_granted=None if approvals_payload is None else [int(item) for item in approvals_payload],
     )
 
 

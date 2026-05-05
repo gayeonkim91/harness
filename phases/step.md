@@ -46,7 +46,7 @@ plan을 실제 실행 가능한 step으로 분해한다.
 
 ## 현재 상태 갱신
 - `latest_checkpoint`는 `step / <판정 코드> — <한줄 근거>` 형식으로 기록한다.
-- `GO`, `GO_WITH_NOTE`면 승인 요청 전 상태를 나타내기 위해 `session_state: awaiting_approval`, `current_phase: step`, `current_step: 현재 (go) step`으로 갱신한다.
+- `GO`, `GO_WITH_NOTE`면 승인 요청 전 상태를 나타내기 위해 `session_state: awaiting_approval`, `current_phase: step`, `current_step: 현재 (go) step`, `pending_approval_for: plan_to_implementation`으로 갱신한다.
 - `REWRITE_STEP`이면 같은 phase를 다시 수행하므로 `session_state: in_progress`, `current_phase: step`, `current_step: 현재 (go) step`으로 유지한다.
 - `REWRITE_PLAN`이면 `session_state: in_progress`, `current_phase: plan`, `current_step: 해당 없음`으로 갱신한다.
 - `HOLD`면 `session_state: paused`, `current_phase: step`, `current_step: 현재 (go) step`으로 갱신한다.

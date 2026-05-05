@@ -91,7 +91,7 @@ tool-specific 차이를 제외한 `/wf-*` semantic contract, artifact ownership,
 
 원칙:
 - `state.json`은 workflow 위치, latest result pointer, approval/block 상태, counters를 담는 canonical machine-readable state다
-- `schema_version`은 required top-level integer field이며 현재 값은 `1`이다
+- `schema_version`은 required top-level integer field이며 현재 값은 `2`이다
 - `workflow_mode`의 허용 값은 `guided | generic`이다
 - `current_phase`의 허용 값은 `pre-planning | plan | step | implementation | verification | review`다
 - `repo_profile_ref`는 task-level로 pin된 repo onboarding profile ref다
@@ -105,6 +105,9 @@ tool-specific 차이를 제외한 `/wf-*` semantic contract, artifact ownership,
 - `current_step_ref`는 execution-step-bearing phase에서만 canonical 의미를 가진다
 - `current_phase=step | implementation`이면 `current_step_ref`를 사용할 수 있다
 - `current_phase=pre-planning | plan | verification | review`이면 `current_step_ref=null`이어야 한다
+- `pending_approval_for`의 공식 값은 `pre_plan_to_plan | plan_to_implementation | closure`이다
+- `approvals_granted`는 승인점 통과 이력을 담는 정수 배열이며 `1=pre_plan_to_plan`, `2=plan_to_implementation`, `3=closure`를 의미한다
+- cut-over 이전 in-flight task는 이전 승인 이력이 비어 있을 수 있으므로, 뒤 승인점을 기록할 때 누락된 앞 번호를 함께 채워 cumulative prefix를 유지한다
 - `counters`는 remediation/rollback routing 진입 횟수를 기록하는 control-plane field다
 - `rework_count`는 `REWORK` 경로 진입 횟수다
 - `rework_count`는 execution rework와 repo-policy supplement가 낸 non-terminal `REWORK`를 함께 세는 aggregate counter다
@@ -345,8 +348,8 @@ guard 해석 원칙:
 - `/wf-verify`는 항상 최신 `plan.md`의 `Verification` contract를 canonical input으로 사용한다
 
 **state.json 초기값**
-- `schema_version=1`
-- `session_state=active`
+- `schema_version=2`
+- `session_state=in_progress`
 - `workflow_mode=<guided | generic>`
 - `current_phase=<initial phase>`
 - `repo_profile_ref=<resolved profile ref | null>`
@@ -356,6 +359,7 @@ guard 해석 원칙:
 - `latest_verification_ref=null`
 - `latest_review_ref=null`
 - `pending_approval_for=null`
+- `approvals_granted=[]`
 - `review_outcome=null`
 - `closure_authorized=false`
 - `counters.rework_count=0`
@@ -689,7 +693,7 @@ null 규칙:
 
 **Precondition / Guard**
 - `state.json.current_phase=verification`이어야 한다
-- `state.json.session_state=active`이어야 한다
+- `state.json.session_state=in_progress`이어야 한다
 - `state.json.pending_approval_for=null`이어야 한다
 - `state.json.current_step_ref=null`이어야 한다
 - `state.json.workspace_baseline_ref`가 있어야 한다
@@ -786,7 +790,7 @@ null 규칙:
 
 **후속 handoff**
 - `/wf-next(source=verify)`는 `latest_verification_ref`가 가리키는 verification result를 읽는다
-- `/wf-next(source=verify)`가 `next_phase=review`, `next_session_state=active`로 라우팅하면 main workflow/orchestrator가 internal `/wf-review`를 이어서 실행할 수 있다
+- `/wf-next(source=verify)`가 `next_phase=review`, `next_session_state=in_progress`로 라우팅하면 main workflow/orchestrator가 internal `/wf-review`를 이어서 실행할 수 있다
 - `/wf-next(source=verify)`가 `REWORK | REWRITE_* | ROLLBACK | HOLD` 경로로 라우팅하면 메인 workflow가 해당 remediation phase를 수행한다
 
 **하지 않는 것**
@@ -816,7 +820,7 @@ null 규칙:
 
 **Precondition / Guard**
 - `state.json.current_phase=review`이어야 한다
-- `state.json.session_state=active`이어야 한다
+- `state.json.session_state=in_progress`이어야 한다
 - `state.json.pending_approval_for=null`이어야 한다
 - `state.json.current_step_ref=null`이어야 한다
 - `state.json.workspace_baseline_ref`가 있어야 한다
@@ -959,13 +963,15 @@ null 규칙:
 - `source=checkpoint | verify | review`이면 `latest_result_ref`를 그대로 사용한다
 - `source=approval`일 때 승인은 새 result artifact를 만들지 않는다. 이 경우 `state.json`의 `pending_approval_for`와 기존 최신 ref를 기준으로 `resolved_result_ref`를 계산한다
 - 즉 approval event를 받은 main workflow/orchestrator가 `/wf-next(source=approval)`를 호출하면, `/wf-next`가 승인 후 phase 전이와 후속 internal skill 실행 여부를 라우팅한다
-- `pending_approval_for=verification_entry`이면 기존 `latest_checkpoint_ref`를 기준으로 한다
+- `pending_approval_for=pre_plan_to_plan | plan_to_implementation`이면 기존 `latest_checkpoint_ref`를 기준으로 한다
 - `pending_approval_for=closure`이면 기존 `latest_review_ref`를 기준으로 한다
 - approval event는 `state.json.session_state=awaiting_approval` 상태에서만 유효하다
-- `pending_approval_for=verification_entry`이면 `current_phase=verification`이어야 한다
+- `pending_approval_for=pre_plan_to_plan`이면 `current_phase=pre-planning`이어야 한다
+- `pending_approval_for=plan_to_implementation`이면 `current_phase=step`이어야 한다
 - `pending_approval_for=closure`이면 `current_phase=review`이고 `review_outcome=DONE | DONE_WITH_NOTE`이어야 한다
 - `/wf-next(source=approval, pending_approval_for=closure)`은 `state.review_outcome`을 canonical closure signal로 사용하며 review artifact의 `judgement_code`를 다시 읽지 않는다
 - `source=approval`인데 `pending_approval_for`가 `null`이거나 허용되지 않은 값이면 invalid approval context로 간주한다
+- PR1-era `verification_entry`는 공식 approval token이 아니며 state migration에서 제거한다. 제거 직후 stale approval event가 들어오고 state가 이미 `current_phase=verification`, `session_state=in_progress`, `pending_approval_for=null`이면 idempotent하게 verification 상태를 반환할 수 있다
 - invalid approval context에서는 `resolved_result_ref = null`로 간주하고, 정상 라우팅을 진행하지 않는다
 - 이 경우 `next_phase=current_phase`, `next_session_state=paused`, `pending_approval_for=null`, `required_artifact_actions=[]`, `reason_code=NEXT_APPROVAL_CONTEXT_INVALID`, `routing_basis_ref=state.json`으로 처리한다
 - `source=approval`에서 `latest_result_ref`가 전달되면, 계산된 `resolved_result_ref`와 일치해야 한다
@@ -1040,47 +1046,48 @@ null 규칙:
 
 - `source=checkpoint`
   - `phase=pre-planning`
-    - `GO | GO_WITH_NOTE` -> `next_phase=plan`, `next_session_state=active`, `pending_approval_for=null`
-    - `REWRITE_PLAN` -> `next_phase=pre-planning`, `next_session_state=active`, `required_artifact_actions += plan.rewrite_required`
+    - `GO | GO_WITH_NOTE` -> `next_phase=pre-planning`, `next_session_state=awaiting_approval`, `pending_approval_for=pre_plan_to_plan`
+    - `REWRITE_PLAN` -> `next_phase=pre-planning`, `next_session_state=in_progress`, `required_artifact_actions += plan.rewrite_required`
     - `HOLD` -> `next_phase=pre-planning`, `next_session_state=paused`
   - `phase=plan`
-    - `GO | GO_WITH_NOTE` -> `next_phase=step`, `next_session_state=active`, `pending_approval_for=null`
-    - `REWRITE_PLAN` -> `next_phase=plan`, `next_session_state=active`, `required_artifact_actions += plan.rewrite_required`
+    - `GO | GO_WITH_NOTE` -> `next_phase=step`, `next_session_state=in_progress`, `pending_approval_for=null`
+    - `REWRITE_PLAN` -> `next_phase=plan`, `next_session_state=in_progress`, `required_artifact_actions += plan.rewrite_required`
     - `HOLD` -> `next_phase=plan`, `next_session_state=paused`
   - `phase=step`
-    - `GO | GO_WITH_NOTE` -> `next_phase=implementation`, `next_session_state=active`, `pending_approval_for=null`
-    - `REWRITE_STEP` -> `next_phase=step`, `next_session_state=active`, `required_artifact_actions += steps.rewrite_required`
-    - `REWRITE_PLAN` -> `next_phase=plan`, `next_session_state=active`, `required_artifact_actions += plan.rewrite_required`
+    - `GO | GO_WITH_NOTE` -> `next_phase=step`, `next_session_state=awaiting_approval`, `pending_approval_for=plan_to_implementation`
+    - `REWRITE_STEP` -> `next_phase=step`, `next_session_state=in_progress`, `required_artifact_actions += steps.rewrite_required`
+    - `REWRITE_PLAN` -> `next_phase=plan`, `next_session_state=in_progress`, `required_artifact_actions += plan.rewrite_required`
     - `HOLD` -> `next_phase=step`, `next_session_state=paused`
   - `phase=implementation`
-    - `GO | GO_WITH_NOTE` + remaining pending step exists -> `next_phase=implementation`, `next_session_state=active`, `required_artifact_actions += steps.mark_current_step_done -> steps.clear_current_step -> steps.select_next_go_step`
-    - `GO | GO_WITH_NOTE` + no remaining pending step -> `next_phase=verification`, `next_session_state=awaiting_approval`, `pending_approval_for=verification_entry`, `required_artifact_actions += steps.mark_current_step_done -> steps.clear_current_step`
-    - `REWORK` -> `next_phase=implementation`, `next_session_state=active`, step 유지, step-done action 없음
-    - `REWRITE_STEP` -> `next_phase=step`, `next_session_state=active`, `required_artifact_actions += steps.rewrite_required`
-    - `REWRITE_PLAN` -> `next_phase=plan`, `next_session_state=active`, `required_artifact_actions += plan.rewrite_required`
+    - `GO | GO_WITH_NOTE` + remaining pending step exists -> `next_phase=implementation`, `next_session_state=in_progress`, `required_artifact_actions += steps.mark_current_step_done -> steps.clear_current_step -> steps.select_next_go_step`
+    - `GO | GO_WITH_NOTE` + no remaining pending step -> `next_phase=verification`, `next_session_state=in_progress`, `pending_approval_for=null`, `required_artifact_actions += steps.mark_current_step_done -> steps.clear_current_step`
+    - `REWORK` -> `next_phase=implementation`, `next_session_state=in_progress`, step 유지, step-done action 없음
+    - `REWRITE_STEP` -> `next_phase=step`, `next_session_state=in_progress`, `required_artifact_actions += steps.rewrite_required`
+    - `REWRITE_PLAN` -> `next_phase=plan`, `next_session_state=in_progress`, `required_artifact_actions += plan.rewrite_required`
     - `ROLLBACK` -> `next_phase=implementation`, `next_session_state=paused`, artifact action 없음
     - `HOLD` -> `next_phase=implementation`, `next_session_state=paused`, artifact action 없음
 
 - `source=verify`
-  - `GO | GO_WITH_NOTE` -> `next_phase=review`, `next_session_state=active`, `pending_approval_for=null`
-  - `REWORK` -> `next_phase=verification`, `next_session_state=active`, `pending_approval_for=null`, artifact action 없음
-  - `REWRITE_STEP` -> `next_phase=step`, `next_session_state=active`, artifact action 없음, `current_step_ref=null`로 step phase를 다시 연다
-  - `REWRITE_PLAN` -> `next_phase=plan`, `next_session_state=active`, `required_artifact_actions += plan.rewrite_required`
+  - `GO | GO_WITH_NOTE` -> `next_phase=review`, `next_session_state=in_progress`, `pending_approval_for=null`
+  - `REWORK` -> `next_phase=verification`, `next_session_state=in_progress`, `pending_approval_for=null`, artifact action 없음
+  - `REWRITE_STEP` -> `next_phase=step`, `next_session_state=in_progress`, artifact action 없음, `current_step_ref=null`로 step phase를 다시 연다
+  - `REWRITE_PLAN` -> `next_phase=plan`, `next_session_state=in_progress`, `required_artifact_actions += plan.rewrite_required`
   - `ROLLBACK` -> `next_phase=verification`, `next_session_state=paused`, artifact action 없음
   - `HOLD` -> `next_phase=verification`, `next_session_state=paused`, artifact action 없음
   - `source=verify`의 `GO_WITH_NOTE` note는 `plan.record_contract_note`로만 변환한다
-  - `source=verify / REWORK`는 이미 verification phase 안에서의 재수행이므로 verification-entry 승인 게이트를 다시 요구하지 않는다
+  - `source=verify / REWORK`는 이미 verification phase 안에서의 재수행이므로 승인 게이트를 다시 요구하지 않는다
 
 - `source=review`
   - `DONE | DONE_WITH_NOTE` -> `next_phase=review`, `next_session_state=awaiting_approval`, `pending_approval_for=closure`, `review_outcome=<same judgement>`, `closure_authorized=false`
-  - `REWORK` -> `next_phase=step`, `next_session_state=active`, `review_outcome=REWORK`, artifact action 없음, `current_step_ref=null`로 step phase를 다시 연다
-  - `REWRITE_PLAN` -> `next_phase=plan`, `next_session_state=active`, `review_outcome=REWRITE_PLAN`, `required_artifact_actions += plan.rewrite_required`
+  - `REWORK` -> `next_phase=step`, `next_session_state=in_progress`, `review_outcome=REWORK`, artifact action 없음, `current_step_ref=null`로 step phase를 다시 연다
+  - `REWRITE_PLAN` -> `next_phase=plan`, `next_session_state=in_progress`, `review_outcome=REWRITE_PLAN`, `required_artifact_actions += plan.rewrite_required`
   - `HOLD` -> `next_phase=review`, `next_session_state=paused`, `review_outcome=HOLD`, artifact action 없음
   - `source=review`에서는 review log가 canonical sink이므로 `DONE_WITH_NOTE`를 추가 artifact action으로 변환하지 않는다
 
 - `source=approval`
-  - `pending_approval_for=verification_entry` -> `next_phase=verification`, `next_session_state=active`, `pending_approval_for=null`, internal `/wf-verify` 후속 실행 가능
-  - `pending_approval_for=closure` -> `next_phase=review`, `next_session_state=done`, `pending_approval_for=null`, `closure_authorized=true`
+  - `pending_approval_for=pre_plan_to_plan` -> `next_phase=plan`, `next_session_state=in_progress`, `pending_approval_for=null`, `approvals_granted += 1`
+  - `pending_approval_for=plan_to_implementation` -> `next_phase=implementation`, `next_session_state=in_progress`, `pending_approval_for=null`, `approvals_granted += 2`
+  - `pending_approval_for=closure` -> `next_phase=review`, `next_session_state=done`, `pending_approval_for=null`, `closure_authorized=true`, `approvals_granted += 3`
 
 - `source=verify | review`에서 `step` phase로 재개하는 경로는 메인 에이전트가 `steps.md` semantic rewrite를 직접 수행하는 경로다
 - 따라서 이 경로들에서는 `/wf-next`가 synthetic `current_step_ref_snapshot`을 만들거나 `steps.rewrite_required` action을 합성하지 않는다
@@ -1114,7 +1121,7 @@ null 규칙:
 - 현재 shared Python runtime은 정상 checkpoint routing 경로에서 `required_artifact_actions` 유무와 무관하게 `deferred_state_transition`을 반환한다
 - `required_artifact_actions=[]`인 경로에서는 `deferred_state_transition = null`일 수 있다는 기존 semantic은 adapter compatibility 여지로 남기되, shared runtime output은 transition package를 선호한다
 - `required_artifact_actions`가 하나라도 있는 경로에서는 `/wf-next`가 직접 state를 쓰지 않고 `deferred_state_transition`을 출력한다
-- `deferred_state_transition`은 최소 `session_state`, `current_phase`, `pending_approval_for`, `review_outcome`, `closure_authorized`, `counters`, 필요 시 `blocked_transition`, `blocked_reason_ref`, `stop_condition_ref`를 포함한다
+- `deferred_state_transition`은 최소 `session_state`, `current_phase`, `pending_approval_for`, `review_outcome`, `closure_authorized`, `counters`, `approvals_granted`, 필요 시 `blocked_transition`, `blocked_reason_ref`, `stop_condition_ref`를 포함한다
 - `deferred_state_transition`에는 `current_step_ref`를 포함하지 않는다
 
 `required_artifact_actions`는 `/wf-apply`가 소비하는 구조화된 action list다.

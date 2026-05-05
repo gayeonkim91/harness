@@ -392,4 +392,5 @@ def test_execute_start_runtime_writes_canonical_initial_state(tmp_path: Path) ->
     assert state["blocked_reason_ref"] is None
     assert state["stop_condition_ref"] is None
     assert state["last_updated"].endswith(" KST")
+    assert state["approvals_granted"] == []
     assert state["adapter_meta"] == {}

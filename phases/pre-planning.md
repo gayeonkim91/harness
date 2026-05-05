@@ -61,7 +61,7 @@ phase_spec:
 
 ## 현재 상태 갱신
 - `latest_checkpoint`는 `pre-planning / <판정 코드> — <한줄 근거>` 형식으로 기록한다.
-- `GO`, `GO_WITH_NOTE`면 승인 요청 전 상태를 나타내기 위해 `session_state: awaiting_approval`, `current_phase: pre-planning`, `current_step: 해당 없음`으로 갱신한다.
+- `GO`, `GO_WITH_NOTE`면 승인 요청 전 상태를 나타내기 위해 `session_state: awaiting_approval`, `current_phase: pre-planning`, `current_step: 해당 없음`, `pending_approval_for: pre_plan_to_plan`으로 갱신한다.
 - `REWRITE_PLAN`이면 같은 phase를 다시 수행하므로 `session_state: in_progress`, `current_phase: pre-planning`, `current_step: 해당 없음`으로 유지한다.
 - `HOLD`면 `session_state: paused`, `current_phase: pre-planning`, `current_step: 해당 없음`으로 갱신한다.
 - `last_updated`를 함께 갱신한다.

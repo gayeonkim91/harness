@@ -27,7 +27,7 @@ def _write_state(
     latest_verification_ref: str | None = None,
     latest_review_ref: str | None = None,
     pending_approval_for: str | None = None,
-    session_state: SessionState = SessionState.ACTIVE,
+    session_state: SessionState = SessionState.IN_PROGRESS,
     review_outcome: str | None = None,
 ) -> None:
     write_state(
@@ -211,11 +211,46 @@ def test_next_checkpoint_plan_go_routes_to_step_from_artifact_not_hint(tmp_path:
 
     assert result.reason_code is None
     assert result.next_phase == CurrentPhase.STEP
-    assert result.next_session_state == SessionState.ACTIVE
+    assert result.next_session_state == SessionState.IN_PROGRESS
     assert result.required_artifact_actions == []
     assert result.routing_basis_ref == ref
     assert result.deferred_state_transition is not None
     assert result.deferred_state_transition.current_phase == CurrentPhase.STEP
+
+
+def test_next_checkpoint_pre_planning_go_requests_pre_plan_approval(tmp_path: Path) -> None:
+    task_root = tmp_path / "task"
+    task_root.mkdir()
+    _write_state(task_root, CurrentPhase.PRE_PLANNING)
+    ref = _write_checkpoint(task_root, "pre-planning", "GO")
+
+    result = _next(task_root, ref, CurrentPhase.PRE_PLANNING)
+
+    assert result.reason_code is None
+    assert result.next_phase == CurrentPhase.PRE_PLANNING
+    assert result.next_session_state == SessionState.AWAITING_APPROVAL
+    assert result.pending_approval_for == "pre_plan_to_plan"
+    assert result.deferred_state_transition is not None
+    assert result.deferred_state_transition.approvals_granted == []
+
+
+def test_next_checkpoint_step_go_requests_plan_to_implementation_approval(tmp_path: Path) -> None:
+    task_root = tmp_path / "task"
+    task_root.mkdir()
+    _write_state(task_root, CurrentPhase.STEP, current_step_ref="S1")
+    ref = _write_checkpoint(
+        task_root,
+        "step",
+        "GO",
+        current_step_ref_snapshot={"step_ref": "S1", "step_text": "Implement one.", "go_marker_present": True},
+    )
+
+    result = _next(task_root, ref, CurrentPhase.STEP)
+
+    assert result.reason_code is None
+    assert result.next_phase == CurrentPhase.STEP
+    assert result.next_session_state == SessionState.AWAITING_APPROVAL
+    assert result.pending_approval_for == "plan_to_implementation"
 
 
 def test_next_checkpoint_plan_rewrite_emits_plan_action(tmp_path: Path) -> None:
@@ -277,7 +312,7 @@ def test_next_checkpoint_implementation_go_selects_next_step_when_remaining(tmp_
     result = _next(task_root, ref, CurrentPhase.IMPLEMENTATION)
 
     assert result.next_phase == CurrentPhase.IMPLEMENTATION
-    assert result.next_session_state == SessionState.ACTIVE
+    assert result.next_session_state == SessionState.IN_PROGRESS
     assert [action.action for action in result.required_artifact_actions] == [
         "steps.mark_current_step_done",
         "steps.clear_current_step",
@@ -326,8 +361,8 @@ def test_next_checkpoint_implementation_go_enters_verification_when_no_remaining
     result = _next(task_root, ref, CurrentPhase.IMPLEMENTATION)
 
     assert result.next_phase == CurrentPhase.VERIFICATION
-    assert result.next_session_state == SessionState.AWAITING_APPROVAL
-    assert result.pending_approval_for == "verification_entry"
+    assert result.next_session_state == SessionState.IN_PROGRESS
+    assert result.pending_approval_for is None
     assert [action.action for action in result.required_artifact_actions] == [
         "steps.mark_current_step_done",
         "steps.clear_current_step",
@@ -402,52 +437,101 @@ def test_next_checkpoint_blocks_non_latest_checkpoint_ref(tmp_path: Path) -> Non
     assert result.next_session_state == SessionState.PAUSED
 
 
-def _next_approval(task_root: Path, ref: str | None = None, hint: JudgementCode = JudgementCode.DONE):
+def _next_approval(
+    task_root: Path,
+    ref: str | None = None,
+    hint: JudgementCode = JudgementCode.DONE,
+    pending_approval_for: str | None = None,
+):
     return execute_next_runtime(
         NextRuntimeInput(
             task_root=task_root,
             source="approval",
             current_phase=CurrentPhase.VERIFICATION,
-            pending_approval_for=None,
+            pending_approval_for=pending_approval_for,
             resolved_result_ref=ref,
             judgement_code=hint,
         )
     )
 
 
-def test_next_approval_verification_entry_enters_verification(tmp_path: Path) -> None:
+def test_next_approval_pre_plan_to_plan_enters_plan_and_records_grant(tmp_path: Path) -> None:
     task_root = tmp_path / "task"
     task_root.mkdir()
     checkpoint_ref = "logs/checkpoints/checkpoint.json"
     _write_state(
         task_root,
-        CurrentPhase.VERIFICATION,
+        CurrentPhase.PRE_PLANNING,
         latest_checkpoint_ref=checkpoint_ref,
-        pending_approval_for="verification_entry",
+        pending_approval_for="pre_plan_to_plan",
         session_state=SessionState.AWAITING_APPROVAL,
     )
 
     result = _next_approval(task_root)
 
     assert result.reason_code is None
-    assert result.next_phase == CurrentPhase.VERIFICATION
-    assert result.next_session_state == SessionState.ACTIVE
+    assert result.next_phase == CurrentPhase.PLAN
+    assert result.next_session_state == SessionState.IN_PROGRESS
     assert result.pending_approval_for is None
     assert result.required_artifact_actions == []
     assert result.routing_basis_ref == checkpoint_ref
     assert result.deferred_state_transition is not None
     assert result.deferred_state_transition.pending_approval_for is None
     assert result.deferred_state_transition.closure_authorized is False
+    assert result.deferred_state_transition.approvals_granted == [1]
 
 
-def test_next_approval_verification_entry_blocks_wrong_phase(tmp_path: Path) -> None:
+def test_next_approval_plan_to_implementation_enters_implementation_and_records_grant(tmp_path: Path) -> None:
+    task_root = tmp_path / "task"
+    task_root.mkdir()
+    checkpoint_ref = "logs/checkpoints/checkpoint.json"
+    _write_state(
+        task_root,
+        CurrentPhase.STEP,
+        latest_checkpoint_ref=checkpoint_ref,
+        pending_approval_for="plan_to_implementation",
+        session_state=SessionState.AWAITING_APPROVAL,
+    )
+
+    result = _next_approval(task_root)
+
+    assert result.reason_code is None
+    assert result.next_phase == CurrentPhase.IMPLEMENTATION
+    assert result.next_session_state == SessionState.IN_PROGRESS
+    assert result.pending_approval_for is None
+    assert result.routing_basis_ref == checkpoint_ref
+    assert result.deferred_state_transition is not None
+    assert result.deferred_state_transition.approvals_granted == [1, 2]
+
+
+def test_next_approval_plan_to_implementation_preserves_existing_grants(tmp_path: Path) -> None:
+    task_root = tmp_path / "task"
+    task_root.mkdir()
+    checkpoint_ref = "logs/checkpoints/checkpoint.json"
+    _write_state(
+        task_root,
+        CurrentPhase.STEP,
+        latest_checkpoint_ref=checkpoint_ref,
+        pending_approval_for="plan_to_implementation",
+        session_state=SessionState.AWAITING_APPROVAL,
+    )
+    _set_state_field(task_root, "approvals_granted", [1])
+
+    result = _next_approval(task_root)
+
+    assert result.reason_code is None
+    assert result.deferred_state_transition is not None
+    assert result.deferred_state_transition.approvals_granted == [1, 2]
+
+
+def test_next_approval_plan_to_implementation_blocks_wrong_phase(tmp_path: Path) -> None:
     task_root = tmp_path / "task"
     task_root.mkdir()
     _write_state(
         task_root,
         CurrentPhase.REVIEW,
         latest_checkpoint_ref="logs/checkpoints/checkpoint.json",
-        pending_approval_for="verification_entry",
+        pending_approval_for="plan_to_implementation",
         session_state=SessionState.AWAITING_APPROVAL,
     )
 
@@ -458,18 +542,65 @@ def test_next_approval_verification_entry_blocks_wrong_phase(tmp_path: Path) -> 
     assert result.pending_approval_for is None
 
 
-def test_next_approval_verification_entry_blocks_wrong_session(tmp_path: Path) -> None:
+def test_next_approval_plan_to_implementation_blocks_wrong_session(tmp_path: Path) -> None:
     task_root = tmp_path / "task"
     task_root.mkdir()
     _write_state(
         task_root,
-        CurrentPhase.VERIFICATION,
+        CurrentPhase.STEP,
         latest_checkpoint_ref="logs/checkpoints/checkpoint.json",
-        pending_approval_for="verification_entry",
-        session_state=SessionState.ACTIVE,
+        pending_approval_for="plan_to_implementation",
+        session_state=SessionState.IN_PROGRESS,
     )
 
     result = _next_approval(task_root)
+
+    assert result.reason_code == "NEXT_APPROVAL_CONTEXT_INVALID"
+    assert result.next_session_state == SessionState.PAUSED
+    assert result.pending_approval_for is None
+
+
+def test_next_approval_absorbs_repaired_legacy_verification_entry_event(tmp_path: Path) -> None:
+    task_root = tmp_path / "task"
+    task_root.mkdir()
+    checkpoint_ref = "logs/checkpoints/checkpoint.json"
+    _write_state(
+        task_root,
+        CurrentPhase.VERIFICATION,
+        latest_checkpoint_ref=checkpoint_ref,
+        pending_approval_for="verification_entry",
+        session_state=SessionState.AWAITING_APPROVAL,
+    )
+    _set_state_field(task_root, "schema_version", 2)
+    _set_state_field(task_root, "last_updated", "2026-04-19 22:00:00 KST")
+
+    result = _next_approval(task_root, pending_approval_for="verification_entry")
+    state = read_state(task_root / "state.json")
+
+    assert result.reason_code is None
+    assert result.next_phase == CurrentPhase.VERIFICATION
+    assert result.next_session_state == SessionState.IN_PROGRESS
+    assert result.pending_approval_for is None
+    assert result.routing_basis_ref == checkpoint_ref
+    assert result.deferred_state_transition is not None
+    assert result.deferred_state_transition.approvals_granted == []
+    assert state.session_state == SessionState.IN_PROGRESS
+    assert state.pending_approval_for is None
+
+
+def test_next_approval_blocks_accidental_approval_in_verification_without_legacy_token(tmp_path: Path) -> None:
+    task_root = tmp_path / "task"
+    task_root.mkdir()
+    checkpoint_ref = "logs/checkpoints/checkpoint.json"
+    _write_state(
+        task_root,
+        CurrentPhase.VERIFICATION,
+        latest_checkpoint_ref=checkpoint_ref,
+        pending_approval_for=None,
+        session_state=SessionState.IN_PROGRESS,
+    )
+
+    result = _next_approval(task_root, ref=checkpoint_ref)
 
     assert result.reason_code == "NEXT_APPROVAL_CONTEXT_INVALID"
     assert result.next_session_state == SessionState.PAUSED
@@ -488,6 +619,7 @@ def test_next_approval_closure_marks_done_and_authorized(tmp_path: Path) -> None
         session_state=SessionState.AWAITING_APPROVAL,
         review_outcome="DONE",
     )
+    _set_state_field(task_root, "approvals_granted", [1, 2])
 
     result = _next_approval(task_root)
 
@@ -500,6 +632,7 @@ def test_next_approval_closure_marks_done_and_authorized(tmp_path: Path) -> None
     assert result.deferred_state_transition is not None
     assert result.deferred_state_transition.closure_authorized is True
     assert result.deferred_state_transition.review_outcome.value == "DONE"
+    assert result.deferred_state_transition.approvals_granted == [1, 2, 3]
 
 
 def test_next_approval_closure_blocks_active_session(tmp_path: Path) -> None:
@@ -510,7 +643,7 @@ def test_next_approval_closure_blocks_active_session(tmp_path: Path) -> None:
         CurrentPhase.REVIEW,
         latest_review_ref="logs/review/review.json",
         pending_approval_for="closure",
-        session_state=SessionState.ACTIVE,
+        session_state=SessionState.IN_PROGRESS,
         review_outcome="DONE",
     )
 
@@ -644,14 +777,14 @@ def test_next_approval_blocks_result_ref_mismatch(tmp_path: Path) -> None:
     assert result.pending_approval_for == "closure"
 
 
-def test_next_approval_blocks_verification_entry_result_ref_mismatch(tmp_path: Path) -> None:
+def test_next_approval_blocks_plan_to_implementation_result_ref_mismatch(tmp_path: Path) -> None:
     task_root = tmp_path / "task"
     task_root.mkdir()
     _write_state(
         task_root,
-        CurrentPhase.VERIFICATION,
+        CurrentPhase.STEP,
         latest_checkpoint_ref="logs/checkpoints/latest.json",
-        pending_approval_for="verification_entry",
+        pending_approval_for="plan_to_implementation",
         session_state=SessionState.AWAITING_APPROVAL,
     )
 
@@ -659,7 +792,7 @@ def test_next_approval_blocks_verification_entry_result_ref_mismatch(tmp_path: P
 
     assert result.reason_code == "NEXT_APPROVAL_RESULT_REF_MISMATCH"
     assert result.next_session_state == SessionState.PAUSED
-    assert result.pending_approval_for == "verification_entry"
+    assert result.pending_approval_for == "plan_to_implementation"
 
 
 def test_next_review_done_routes_to_closure_approval(tmp_path: Path) -> None:
@@ -721,7 +854,7 @@ def test_next_review_rework_routes_to_step(tmp_path: Path) -> None:
     result = _next_review(task_root, ref)
 
     assert result.next_phase == CurrentPhase.STEP
-    assert result.next_session_state == SessionState.ACTIVE
+    assert result.next_session_state == SessionState.IN_PROGRESS
     assert result.required_artifact_actions == []
     assert result.deferred_state_transition is not None
     assert result.deferred_state_transition.review_outcome.value == "REWORK"
@@ -766,7 +899,7 @@ def test_next_review_rewrite_plan_emits_plan_action(tmp_path: Path) -> None:
     result = _next_review(task_root, ref)
 
     assert result.next_phase == CurrentPhase.PLAN
-    assert result.next_session_state == SessionState.ACTIVE
+    assert result.next_session_state == SessionState.IN_PROGRESS
     assert [action.action for action in result.required_artifact_actions] == ["plan.rewrite_required"]
     assert result.required_artifact_actions[0].params["rewrite_reason_code"] == "plan_gap"
     assert result.deferred_state_transition is not None
@@ -823,7 +956,7 @@ def test_next_verify_go_routes_to_review_from_artifact_not_hint(tmp_path: Path) 
 
     assert result.reason_code is None
     assert result.next_phase == CurrentPhase.REVIEW
-    assert result.next_session_state == SessionState.ACTIVE
+    assert result.next_session_state == SessionState.IN_PROGRESS
     assert result.required_artifact_actions == []
     assert result.routing_basis_ref == ref
     assert result.deferred_state_transition is not None
@@ -862,7 +995,7 @@ def test_next_verify_rewrite_plan_emits_plan_rewrite_action(tmp_path: Path) -> N
     result = _next_verify(task_root, ref)
 
     assert result.next_phase == CurrentPhase.PLAN
-    assert result.next_session_state == SessionState.ACTIVE
+    assert result.next_session_state == SessionState.IN_PROGRESS
     assert [action.action for action in result.required_artifact_actions] == ["plan.rewrite_required"]
     assert result.required_artifact_actions[0].params["rewrite_reason_code"] == "verification_contract_gap"
 
@@ -876,7 +1009,7 @@ def test_next_verify_rework_stays_in_verification(tmp_path: Path) -> None:
     result = _next_verify(task_root, ref)
 
     assert result.next_phase == CurrentPhase.VERIFICATION
-    assert result.next_session_state == SessionState.ACTIVE
+    assert result.next_session_state == SessionState.IN_PROGRESS
     assert result.required_artifact_actions == []
     assert result.deferred_state_transition is not None
     assert result.deferred_state_transition.counters.rework_count == 1
@@ -891,7 +1024,7 @@ def test_next_verify_rewrite_step_routes_to_step_without_actions(tmp_path: Path)
     result = _next_verify(task_root, ref)
 
     assert result.next_phase == CurrentPhase.STEP
-    assert result.next_session_state == SessionState.ACTIVE
+    assert result.next_session_state == SessionState.IN_PROGRESS
     assert result.required_artifact_actions == []
 
 
@@ -1091,6 +1224,7 @@ def test_runtime_cli_round_trips_closure_approval_into_apply(monkeypatch, capsys
         session_state=SessionState.AWAITING_APPROVAL,
         review_outcome="DONE",
     )
+    _set_state_field(task_root, "approvals_granted", [1, 2])
     next_payload = {
         "task_root": str(task_root),
         "source": "approval",
@@ -1107,6 +1241,7 @@ def test_runtime_cli_round_trips_closure_approval_into_apply(monkeypatch, capsys
     assert next_output["required_artifact_actions"] == []
     assert next_output["deferred_state_transition"]["session_state"] == "done"
     assert next_output["deferred_state_transition"]["closure_authorized"] is True
+    assert next_output["deferred_state_transition"]["approvals_granted"] == [1, 2, 3]
 
     apply_payload = {
         "task_root": str(task_root),
@@ -1126,3 +1261,4 @@ def test_runtime_cli_round_trips_closure_approval_into_apply(monkeypatch, capsys
     assert state.current_phase == CurrentPhase.REVIEW
     assert state.pending_approval_for is None
     assert state.closure_authorized is True
+    assert state.approvals_granted == [1, 2, 3]

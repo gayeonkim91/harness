@@ -15,8 +15,6 @@ class SessionState(str, Enum):
     AWAITING_APPROVAL = "awaiting_approval"
     PAUSED = "paused"
     DONE = "done"
-    # Code-internal alias retained while in-flight callers migrate; serialized as "in_progress".
-    ACTIVE = "in_progress"
 
 
 class WorkflowMode(str, Enum):
@@ -78,6 +76,7 @@ class HarnessState:
     blocked_reason_ref: str | None
     stop_condition_ref: str | None
     last_updated: str
+    approvals_granted: list[int] = field(default_factory=list)
     adapter_meta: dict[str, Any] = field(default_factory=dict)
 
 
@@ -94,6 +93,7 @@ class DeferredStateTransition:
     blocked_transition: str | None = None
     blocked_reason_ref: str | None = None
     stop_condition_ref: str | None = None
+    approvals_granted: list[int] | None = None
 
 
 @dataclass(slots=True)

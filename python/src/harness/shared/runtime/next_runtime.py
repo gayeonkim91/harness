@@ -9,6 +9,7 @@ from typing import Any
 
 from harness.shared.artifacts.state_artifact import read_state
 from harness.shared.contracts.actions import ArtifactAction, ArtifactTarget, CurrentStepRefSnapshot, SelectionBasis, SelectionMode
+from harness.shared.contracts.approval import ApprovalPoint, grant_approval
 from harness.shared.contracts.results import (
     CheckpointResult,
     JudgementCode,
@@ -62,6 +63,8 @@ def execute_next_runtime(input_data: NextRuntimeInput) -> NextResult:
             pending_approval_for=state.pending_approval_for,
         )
     if input_data.source == "approval":
+        if _is_repaired_legacy_verification_approval_event(state, input_data):
+            return _repaired_legacy_verification_approval_result(state)
         return _route_approval(state, input_data.resolved_result_ref)
 
     if not input_data.resolved_result_ref:
@@ -200,8 +203,8 @@ def _route_approval(state: HarnessState, latest_result_ref: str | None) -> NextR
     if pending is None:
         return _blocked_result(state, "NEXT_APPROVAL_CONTEXT_INVALID", "state.json", None)
 
-    if pending == "verification_entry":
-        if state.session_state != SessionState.AWAITING_APPROVAL or state.current_phase != CurrentPhase.VERIFICATION:
+    if pending == ApprovalPoint.PRE_PLAN_TO_PLAN.value:
+        if state.session_state != SessionState.AWAITING_APPROVAL or state.current_phase != CurrentPhase.PRE_PLANNING:
             return _blocked_result(state, "NEXT_APPROVAL_CONTEXT_INVALID", "state.json", None)
         if not state.latest_checkpoint_ref:
             return _blocked_result(state, "NEXT_RESULT_REF_MISSING", "state.json", pending)
@@ -210,13 +213,31 @@ def _route_approval(state: HarnessState, latest_result_ref: str | None) -> NextR
         return _approval_result(
             state,
             routing_basis_ref=state.latest_checkpoint_ref,
-            next_phase=CurrentPhase.VERIFICATION,
-            next_session_state=SessionState.ACTIVE,
+            next_phase=CurrentPhase.PLAN,
+            next_session_state=SessionState.IN_PROGRESS,
             pending_approval_for=None,
             closure_authorized=state.closure_authorized,
+            approval_point=ApprovalPoint.PRE_PLAN_TO_PLAN,
         )
 
-    if pending == "closure":
+    if pending == ApprovalPoint.PLAN_TO_IMPLEMENTATION.value:
+        if state.session_state != SessionState.AWAITING_APPROVAL or state.current_phase != CurrentPhase.STEP:
+            return _blocked_result(state, "NEXT_APPROVAL_CONTEXT_INVALID", "state.json", None)
+        if not state.latest_checkpoint_ref:
+            return _blocked_result(state, "NEXT_RESULT_REF_MISSING", "state.json", pending)
+        if latest_result_ref is not None and latest_result_ref != state.latest_checkpoint_ref:
+            return _blocked_result(state, "NEXT_APPROVAL_RESULT_REF_MISMATCH", "state.json", pending)
+        return _approval_result(
+            state,
+            routing_basis_ref=state.latest_checkpoint_ref,
+            next_phase=CurrentPhase.IMPLEMENTATION,
+            next_session_state=SessionState.IN_PROGRESS,
+            pending_approval_for=None,
+            closure_authorized=state.closure_authorized,
+            approval_point=ApprovalPoint.PLAN_TO_IMPLEMENTATION,
+        )
+
+    if pending == ApprovalPoint.CLOSURE.value:
         if (
             state.session_state != SessionState.AWAITING_APPROVAL
             or state.current_phase != CurrentPhase.REVIEW
@@ -234,9 +255,42 @@ def _route_approval(state: HarnessState, latest_result_ref: str | None) -> NextR
             next_session_state=SessionState.DONE,
             pending_approval_for=None,
             closure_authorized=True,
+            approval_point=ApprovalPoint.CLOSURE,
         )
 
     return _blocked_result(state, "NEXT_APPROVAL_CONTEXT_INVALID", "state.json", None)
+
+
+def _is_repaired_legacy_verification_approval_event(state: HarnessState, input_data: NextRuntimeInput) -> bool:
+    if state.pending_approval_for is not None:
+        return False
+    if state.session_state != SessionState.IN_PROGRESS or state.current_phase != CurrentPhase.VERIFICATION:
+        return False
+    return input_data.pending_approval_for == "verification_entry"
+
+
+def _repaired_legacy_verification_approval_result(state: HarnessState) -> NextResult:
+    routing_basis_ref = state.latest_checkpoint_ref or "state.json"
+    return NextResult(
+        next_phase=CurrentPhase.VERIFICATION,
+        next_session_state=SessionState.IN_PROGRESS,
+        pending_approval_for=None,
+        required_artifact_actions=[],
+        reason_code=None,
+        routing_basis_ref=routing_basis_ref,
+        deferred_state_transition=DeferredStateTransition(
+            session_state=SessionState.IN_PROGRESS,
+            current_phase=CurrentPhase.VERIFICATION,
+            pending_approval_for=None,
+            review_outcome=state.review_outcome,
+            closure_authorized=state.closure_authorized,
+            counters=state.counters,
+            blocked_transition=state.blocked_transition,
+            blocked_reason_ref=state.blocked_reason_ref,
+            stop_condition_ref=state.stop_condition_ref,
+            approvals_granted=state.approvals_granted,
+        ),
+    )
 
 
 def _resolve_task_ref(task_root: Path, ref: str) -> Path:
@@ -406,6 +460,7 @@ def _blocked_result(
             blocked_transition="wf-next",
             blocked_reason_ref=routing_basis_ref,
             stop_condition_ref=state.stop_condition_ref,
+            approvals_granted=state.approvals_granted,
         ),
     )
 
@@ -432,6 +487,7 @@ def _transition_for(
         closure_authorized=state.closure_authorized,
         counters=counters,
         stop_condition_ref=stop_condition_code,
+        approvals_granted=state.approvals_granted,
     )
 
 
@@ -526,7 +582,9 @@ def _approval_result(
     next_session_state: SessionState,
     pending_approval_for: str | None,
     closure_authorized: bool,
+    approval_point: ApprovalPoint,
 ) -> NextResult:
+    approvals_granted = grant_approval(state.approvals_granted, approval_point)
     return NextResult(
         next_phase=next_phase,
         next_session_state=next_session_state,
@@ -544,6 +602,7 @@ def _approval_result(
             blocked_transition=state.blocked_transition,
             blocked_reason_ref=state.blocked_reason_ref,
             stop_condition_ref=state.stop_condition_ref,
+            approvals_granted=approvals_granted,
         ),
     )
 
@@ -572,6 +631,7 @@ def _review_transition_for(
         blocked_transition=state.blocked_transition,
         blocked_reason_ref=state.blocked_reason_ref,
         stop_condition_ref=state.stop_condition_ref,
+        approvals_granted=state.approvals_granted,
     )
 
 
@@ -634,14 +694,22 @@ def _route_checkpoint(task_root: Path, state: HarnessState, checkpoint: Checkpoi
 
     if phase == CurrentPhase.PRE_PLANNING:
         if judgement in {JudgementCode.GO, JudgementCode.GO_WITH_NOTE}:
-            return _result(state, checkpoint, result_ref, CurrentPhase.PLAN, SessionState.ACTIVE, None, [])
+            return _result(
+                state,
+                checkpoint,
+                result_ref,
+                CurrentPhase.PRE_PLANNING,
+                SessionState.AWAITING_APPROVAL,
+                ApprovalPoint.PRE_PLAN_TO_PLAN.value,
+                [],
+            )
         if judgement == JudgementCode.REWRITE_PLAN:
             return _result(
                 state,
                 checkpoint,
                 result_ref,
                 CurrentPhase.PRE_PLANNING,
-                SessionState.ACTIVE,
+                SessionState.IN_PROGRESS,
                 None,
                 [_plan_rewrite_action(checkpoint, result_ref)],
             )
@@ -649,14 +717,14 @@ def _route_checkpoint(task_root: Path, state: HarnessState, checkpoint: Checkpoi
 
     if phase == CurrentPhase.PLAN:
         if judgement in {JudgementCode.GO, JudgementCode.GO_WITH_NOTE}:
-            return _result(state, checkpoint, result_ref, CurrentPhase.STEP, SessionState.ACTIVE, None, [])
+            return _result(state, checkpoint, result_ref, CurrentPhase.STEP, SessionState.IN_PROGRESS, None, [])
         if judgement == JudgementCode.REWRITE_PLAN:
             return _result(
                 state,
                 checkpoint,
                 result_ref,
                 CurrentPhase.PLAN,
-                SessionState.ACTIVE,
+                SessionState.IN_PROGRESS,
                 None,
                 [_plan_rewrite_action(checkpoint, result_ref)],
             )
@@ -664,19 +732,27 @@ def _route_checkpoint(task_root: Path, state: HarnessState, checkpoint: Checkpoi
 
     if phase == CurrentPhase.STEP:
         if judgement in {JudgementCode.GO, JudgementCode.GO_WITH_NOTE}:
-            return _result(state, checkpoint, result_ref, CurrentPhase.IMPLEMENTATION, SessionState.ACTIVE, None, [])
+            return _result(
+                state,
+                checkpoint,
+                result_ref,
+                CurrentPhase.STEP,
+                SessionState.AWAITING_APPROVAL,
+                ApprovalPoint.PLAN_TO_IMPLEMENTATION.value,
+                [],
+            )
         if judgement == JudgementCode.REWRITE_STEP:
             action = _steps_rewrite_action(checkpoint, result_ref)
             if action is None:
                 return _blocked_result(state, "NEXT_CURRENT_STEP_CONTEXT_UNRESOLVABLE", "state.json", state.pending_approval_for)
-            return _result(state, checkpoint, result_ref, CurrentPhase.STEP, SessionState.ACTIVE, None, [action])
+            return _result(state, checkpoint, result_ref, CurrentPhase.STEP, SessionState.IN_PROGRESS, None, [action])
         if judgement == JudgementCode.REWRITE_PLAN:
             return _result(
                 state,
                 checkpoint,
                 result_ref,
                 CurrentPhase.PLAN,
-                SessionState.ACTIVE,
+                SessionState.IN_PROGRESS,
                 None,
                 [_plan_rewrite_action(checkpoint, result_ref)],
             )
@@ -691,26 +767,26 @@ def _route_checkpoint(task_root: Path, state: HarnessState, checkpoint: Checkpoi
 def _route_verify(state: HarnessState, verification: VerificationResult, result_ref: str) -> NextResult:
     judgement = verification.judgement_code
     if judgement in {JudgementCode.GO, JudgementCode.GO_WITH_NOTE}:
-        return _verification_result(state, verification, result_ref, CurrentPhase.REVIEW, SessionState.ACTIVE, None, [])
+        return _verification_result(state, verification, result_ref, CurrentPhase.REVIEW, SessionState.IN_PROGRESS, None, [])
     if judgement == JudgementCode.REWORK:
         return _verification_result(
             state,
             verification,
             result_ref,
             CurrentPhase.VERIFICATION,
-            SessionState.ACTIVE,
+            SessionState.IN_PROGRESS,
             None,
             [],
         )
     if judgement == JudgementCode.REWRITE_STEP:
-        return _verification_result(state, verification, result_ref, CurrentPhase.STEP, SessionState.ACTIVE, None, [])
+        return _verification_result(state, verification, result_ref, CurrentPhase.STEP, SessionState.IN_PROGRESS, None, [])
     if judgement == JudgementCode.REWRITE_PLAN:
         return _verification_result(
             state,
             verification,
             result_ref,
             CurrentPhase.PLAN,
-            SessionState.ACTIVE,
+            SessionState.IN_PROGRESS,
             None,
             [_plan_rewrite_action_from_verify(verification, result_ref)],
         )
@@ -736,7 +812,7 @@ def _route_review(state: HarnessState, review: ReviewResult, result_ref: str) ->
             result_ref,
             CurrentPhase.REVIEW,
             SessionState.AWAITING_APPROVAL,
-            "closure",
+            ApprovalPoint.CLOSURE.value,
             [],
             ReviewOutcome.DONE,
         )
@@ -747,7 +823,7 @@ def _route_review(state: HarnessState, review: ReviewResult, result_ref: str) ->
             result_ref,
             CurrentPhase.REVIEW,
             SessionState.AWAITING_APPROVAL,
-            "closure",
+            ApprovalPoint.CLOSURE.value,
             [],
             ReviewOutcome.DONE_WITH_NOTE,
         )
@@ -757,7 +833,7 @@ def _route_review(state: HarnessState, review: ReviewResult, result_ref: str) ->
             review,
             result_ref,
             CurrentPhase.STEP,
-            SessionState.ACTIVE,
+            SessionState.IN_PROGRESS,
             None,
             [],
             ReviewOutcome.REWORK,
@@ -768,7 +844,7 @@ def _route_review(state: HarnessState, review: ReviewResult, result_ref: str) ->
             review,
             result_ref,
             CurrentPhase.PLAN,
-            SessionState.ACTIVE,
+            SessionState.IN_PROGRESS,
             None,
             [_plan_rewrite_action_from_review(review, result_ref)],
             ReviewOutcome.REWRITE_PLAN,
@@ -819,7 +895,7 @@ def _route_implementation(
                 checkpoint,
                 result_ref,
                 CurrentPhase.IMPLEMENTATION,
-                SessionState.ACTIVE,
+                SessionState.IN_PROGRESS,
                 None,
                 actions,
             )
@@ -828,25 +904,25 @@ def _route_implementation(
             checkpoint,
             result_ref,
             CurrentPhase.VERIFICATION,
-            SessionState.AWAITING_APPROVAL,
-            "verification_entry",
+            SessionState.IN_PROGRESS,
+            None,
             actions,
         )
 
     if judgement == JudgementCode.REWORK:
-        return _result(state, checkpoint, result_ref, CurrentPhase.IMPLEMENTATION, SessionState.ACTIVE, None, [])
+        return _result(state, checkpoint, result_ref, CurrentPhase.IMPLEMENTATION, SessionState.IN_PROGRESS, None, [])
     if judgement == JudgementCode.REWRITE_STEP:
         action = _steps_rewrite_action(checkpoint, result_ref)
         if action is None:
             return _blocked_result(state, "NEXT_CURRENT_STEP_CONTEXT_UNRESOLVABLE", "state.json", state.pending_approval_for)
-        return _result(state, checkpoint, result_ref, CurrentPhase.STEP, SessionState.ACTIVE, None, [action])
+        return _result(state, checkpoint, result_ref, CurrentPhase.STEP, SessionState.IN_PROGRESS, None, [action])
     if judgement == JudgementCode.REWRITE_PLAN:
         return _result(
             state,
             checkpoint,
             result_ref,
             CurrentPhase.PLAN,
-            SessionState.ACTIVE,
+            SessionState.IN_PROGRESS,
             None,
             [_plan_rewrite_action(checkpoint, result_ref)],
         )

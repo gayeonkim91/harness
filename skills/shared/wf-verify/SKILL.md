@@ -14,7 +14,7 @@
 
 ## Guard Expectations
 - `state.json.current_phase=verification`이어야 한다
-- `state.json.session_state=active`이어야 한다
+- `state.json.session_state=in_progress`이어야 한다
 - pending approval과 current step ref가 없어야 한다
 - workspace baseline, `plan.md`, verification basis ref가 있어야 한다
 

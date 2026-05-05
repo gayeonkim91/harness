@@ -219,6 +219,7 @@ def execute_start_runtime(input_data: StartRuntimeInput) -> dict[str, object]:
         blocked_reason_ref=None,
         stop_condition_ref=None,
         last_updated=_kst_timestamp(),
+        approvals_granted=[],
         adapter_meta={},
     )
     write_initial_state(task_paths.state_path, initial_state)

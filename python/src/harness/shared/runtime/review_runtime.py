@@ -224,6 +224,7 @@ def _with_latest_review_ref(state: HarnessState, review_ref: str) -> HarnessStat
         blocked_reason_ref=blocked_reason_ref,
         stop_condition_ref=state.stop_condition_ref,
         last_updated=kst_now_human(),
+        approvals_granted=state.approvals_granted,
         adapter_meta=state.adapter_meta,
     )
 
@@ -248,6 +249,7 @@ def _with_review_blocked_state(state: HarnessState, blocked_reason_ref: str) -> 
         blocked_reason_ref=blocked_reason_ref,
         stop_condition_ref=state.stop_condition_ref,
         last_updated=kst_now_human(),
+        approvals_granted=state.approvals_granted,
         adapter_meta=state.adapter_meta,
     )
 
@@ -272,6 +274,7 @@ def _with_review_state_update_blocked_state(state: HarnessState, review_ref: str
         blocked_reason_ref=review_ref,
         stop_condition_ref=state.stop_condition_ref,
         last_updated=kst_now_human(),
+        approvals_granted=state.approvals_granted,
         adapter_meta=state.adapter_meta,
     )
 

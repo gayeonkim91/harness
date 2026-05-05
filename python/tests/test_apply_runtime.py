@@ -31,7 +31,7 @@ def _write_state(task_root: Path, current_step_ref: str | None = "S1") -> None:
         task_root / "state.json",
         HarnessState(
             schema_version=1,
-            session_state=SessionState.ACTIVE,
+            session_state=SessionState.IN_PROGRESS,
             workflow_mode=WorkflowMode.GENERIC,
             current_phase=CurrentPhase.IMPLEMENTATION,
             repo_profile_ref=None,
@@ -72,7 +72,7 @@ def _snapshot() -> CurrentStepRefSnapshot:
 
 def _transition(next_phase: CurrentPhase = CurrentPhase.IMPLEMENTATION) -> DeferredStateTransition:
     return DeferredStateTransition(
-        session_state=SessionState.ACTIVE,
+        session_state=SessionState.IN_PROGRESS,
         current_phase=next_phase,
         pending_approval_for=None,
         review_outcome=None,

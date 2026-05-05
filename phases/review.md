@@ -54,7 +54,7 @@ phase_spec:
 ## 현재 상태 갱신
 - `latest_checkpoint`는 `review / <판정 코드> — <한줄 근거>` 형식으로 기록한다.
 - `DONE`, `DONE_WITH_NOTE`면 plan의 완료 조건(DoD) 체크박스를 갱신한다.
-- `DONE`, `DONE_WITH_NOTE`이고 `eval`이 필요 없는 경우 최종 승인 요청 전 상태를 나타내기 위해 `session_state: awaiting_approval`, `current_phase: review`, `current_step: 해당 없음`으로 갱신한다.
+- `DONE`, `DONE_WITH_NOTE`이고 `eval`이 필요 없는 경우 최종 승인 요청 전 상태를 나타내기 위해 `session_state: awaiting_approval`, `current_phase: review`, `current_step: 해당 없음`, `pending_approval_for: closure`로 갱신한다.
 - `DONE`, `DONE_WITH_NOTE`이고 `eval`이 필요한 경우 `eval.md` 작성이 끝날 때까지 `session_state: in_progress`, `current_phase: review`, `current_step: 해당 없음`으로 유지한다.
 - `REWORK`면 `session_state: in_progress`, `current_phase: step`, `current_step: 해당 없음`으로 갱신한다.
 - `REWRITE_PLAN`이면 `session_state: in_progress`, `current_phase: plan`, `current_step: 해당 없음`으로 갱신한다.

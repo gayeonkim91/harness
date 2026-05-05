@@ -20,7 +20,9 @@ Plan 작성 메모
 - session_state: draft
 - current_phase:
 - current_step: 해당 없음
+- pending_approval_for:
 - latest_checkpoint:
+- approvals_granted: []
 - last_updated:
 
 ## 사전 계획 정리 (Pre-planning, 필요한 경우만 작성)

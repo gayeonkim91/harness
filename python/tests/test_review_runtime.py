@@ -83,7 +83,7 @@ def _write_state(
         task_root / "state.json",
         HarnessState(
             schema_version=1,
-            session_state=SessionState.ACTIVE,
+            session_state=SessionState.IN_PROGRESS,
             workflow_mode=WorkflowMode.GENERIC,
             current_phase=phase,
             repo_profile_ref=None,
@@ -226,7 +226,7 @@ def test_persist_review_runtime_clears_previous_review_execution_block_on_succes
         task_root / "state.json",
         HarnessState(
             schema_version=1,
-            session_state=SessionState.ACTIVE,
+            session_state=SessionState.IN_PROGRESS,
             workflow_mode=WorkflowMode.GENERIC,
             current_phase=CurrentPhase.REVIEW,
             repo_profile_ref=None,
@@ -265,7 +265,7 @@ def test_persist_review_runtime_clears_previous_state_update_block_on_success(tm
         task_root / "state.json",
         HarnessState(
             schema_version=1,
-            session_state=SessionState.ACTIVE,
+            session_state=SessionState.IN_PROGRESS,
             workflow_mode=WorkflowMode.GENERIC,
             current_phase=CurrentPhase.REVIEW,
             repo_profile_ref=None,
@@ -308,7 +308,7 @@ def test_persist_review_runtime_blocks_stale_verification_without_log(tmp_path: 
 
     assert result["reason_code"] == "REVIEW_VERIFICATION_STALE"
     assert list((task_root / "logs" / "review").glob("*.json")) == []
-    assert read_state(task_root / "state.json").session_state == SessionState.ACTIVE
+    assert read_state(task_root / "state.json").session_state == SessionState.IN_PROGRESS
 
 
 def test_persist_review_runtime_blocks_missing_verification_ref(tmp_path: Path) -> None:
@@ -321,7 +321,7 @@ def test_persist_review_runtime_blocks_missing_verification_ref(tmp_path: Path) 
 
     assert result["reason_code"] == "REVIEW_VERIFICATION_REF_MISSING"
     assert result["message_summary"] == "`/wf-review` requires latest verification ref."
-    assert read_state(task_root / "state.json").session_state == SessionState.ACTIVE
+    assert read_state(task_root / "state.json").session_state == SessionState.IN_PROGRESS
 
 
 def test_persist_review_runtime_guard_reason_matrix_without_record_or_state_change(tmp_path: Path) -> None:
@@ -352,7 +352,7 @@ def test_persist_review_runtime_guard_reason_matrix_without_record_or_state_chan
         assert not (case_root / "logs" / "review").exists()
         assert not (case_root / "logs" / "review-failures").exists()
         if label != "missing-state":
-            assert read_state(case_root / "state.json").session_state == SessionState.ACTIVE
+            assert read_state(case_root / "state.json").session_state == SessionState.IN_PROGRESS
 
 
 def test_persist_review_runtime_blocks_invalid_session_and_pending_without_record(tmp_path: Path) -> None:
@@ -360,7 +360,7 @@ def test_persist_review_runtime_blocks_invalid_session_and_pending_without_recor
     verification_ref = read_state(task_root / "state.json").latest_verification_ref
     for label, session_state, pending_approval_for, expected in [
         ("paused", SessionState.PAUSED, None, "REVIEW_SESSION_STATE_INVALID"),
-        ("pending", SessionState.ACTIVE, "closure", "REVIEW_PENDING_APPROVAL_INVALID"),
+        ("pending", SessionState.IN_PROGRESS, "closure", "REVIEW_PENDING_APPROVAL_INVALID"),
     ]:
         case_root = task_root.parent / f"case-{label}"
         case_root.mkdir()
@@ -500,7 +500,7 @@ def test_persist_review_runtime_treats_null_verification_fingerprint_as_unreadab
     )
 
     assert result["reason_code"] == "REVIEW_VERIFICATION_REF_UNREADABLE"
-    assert read_state(task_root / "state.json").session_state == SessionState.ACTIVE
+    assert read_state(task_root / "state.json").session_state == SessionState.IN_PROGRESS
 
 
 def test_runtime_cli_serializes_review_result(monkeypatch, capsys, tmp_path: Path) -> None:

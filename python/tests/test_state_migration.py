@@ -62,18 +62,25 @@ def test_migrate_v1_rewrites_session_state_and_timestamp(tmp_path: Path) -> None
     assert migrated["last_updated"] == "2026-04-19 22:00:00 KST"
 
 
-def test_migrate_v1_preserves_pending_approval_token(tmp_path: Path) -> None:
-    # Approval token rewrite is deferred to the approval-router PR; until then
-    # a migrated v1 task must keep its original pending_approval_for so the
-    # router (which still expects v1 tokens) can route it.
+def test_migrate_v1_clears_removed_verification_entry_gate(tmp_path: Path) -> None:
     state_path = tmp_path / "state.json"
-    _write(state_path, _v1_payload(pending_approval_for="verification_entry"))
+    _write(
+        state_path,
+        _v1_payload(
+            session_state="awaiting_approval",
+            current_phase="verification",
+            pending_approval_for="verification_entry",
+        ),
+    )
 
     result = migrate_state_file(state_path)
     migrated = json.loads(state_path.read_text(encoding="utf-8"))
 
-    assert migrated["pending_approval_for"] == "verification_entry"
-    assert not any(rewrite.startswith("pending_approval_for") for rewrite in result.rewrites)
+    assert migrated["pending_approval_for"] is None
+    assert migrated["session_state"] == "in_progress"
+    assert "pending_approval_for:verification_entry->null" in result.rewrites
+    assert "session_state:awaiting_approval->in_progress" in result.rewrites
+    assert migrated["approvals_granted"] == []
 
 
 def test_migrate_writes_backup_with_v1_suffix(tmp_path: Path) -> None:
@@ -97,6 +104,8 @@ def test_migrate_v2_is_noop(tmp_path: Path) -> None:
     payload = _v1_payload(
         schema_version=2,
         session_state="in_progress",
+        pending_approval_for=None,
+        approvals_granted=[],
         last_updated="2026-04-19 22:00:00 KST",
     )
     _write(state_path, payload)
@@ -107,6 +116,56 @@ def test_migrate_v2_is_noop(tmp_path: Path) -> None:
     assert result.backup_path is None
     assert result.rewrites == []
     assert json.loads(state_path.read_text(encoding="utf-8")) == payload
+
+
+def test_migrate_v2_repairs_pr1_legacy_verification_entry(tmp_path: Path) -> None:
+    state_path = tmp_path / "state.json"
+    _write(
+        state_path,
+        _v1_payload(
+            schema_version=2,
+            session_state="awaiting_approval",
+            current_phase="verification",
+            pending_approval_for="verification_entry",
+            last_updated="2026-04-19 22:00:00 KST",
+        ),
+    )
+
+    result = migrate_state_file(state_path)
+    migrated = json.loads(state_path.read_text(encoding="utf-8"))
+
+    assert result.migrated is True
+    assert result.from_version == 2
+    assert result.to_version == 2
+    assert result.backup_path is not None
+    assert result.backup_path.name == "state.json.v2.bak"
+    assert migrated["schema_version"] == 2
+    assert migrated["session_state"] == "in_progress"
+    assert migrated["pending_approval_for"] is None
+    assert migrated["current_phase"] == "verification"
+    assert migrated["approvals_granted"] == []
+    assert "pending_approval_for:verification_entry->null" in result.rewrites
+
+
+def test_migrate_v2_repairs_iso_timestamp(tmp_path: Path) -> None:
+    state_path = tmp_path / "state.json"
+    _write(
+        state_path,
+        _v1_payload(
+            schema_version=2,
+            session_state="in_progress",
+            pending_approval_for=None,
+            approvals_granted=[],
+            last_updated="2026-04-19T22:00:00+09:00",
+        ),
+    )
+
+    result = migrate_state_file(state_path)
+    migrated = json.loads(state_path.read_text(encoding="utf-8"))
+
+    assert result.migrated is True
+    assert migrated["last_updated"] == "2026-04-19 22:00:00 KST"
+    assert "last_updated:iso->kst_suffix" in result.rewrites
 
 
 def test_migrate_then_read_state_round_trip(tmp_path: Path) -> None:
@@ -120,6 +179,29 @@ def test_migrate_then_read_state_round_trip(tmp_path: Path) -> None:
     assert state.session_state is SessionState.IN_PROGRESS
     assert state.pending_approval_for == "closure"
     assert state.last_updated == "2026-04-19 22:00:00 KST"
+
+
+def test_read_state_auto_repairs_pr1_v2_legacy_verification_entry(tmp_path: Path) -> None:
+    state_path = tmp_path / "state.json"
+    _write(
+        state_path,
+        _v1_payload(
+            schema_version=2,
+            session_state="awaiting_approval",
+            current_phase="verification",
+            pending_approval_for="verification_entry",
+            last_updated="2026-04-19 22:00:00 KST",
+        ),
+    )
+
+    state = read_state(state_path)
+    on_disk = json.loads(state_path.read_text(encoding="utf-8"))
+
+    assert state.session_state is SessionState.IN_PROGRESS
+    assert state.pending_approval_for is None
+    assert on_disk["session_state"] == "in_progress"
+    assert on_disk["pending_approval_for"] is None
+    assert (state_path.parent / "state.json.v2.bak").exists()
 
 
 def test_migrate_unparseable_timestamp_left_untouched(tmp_path: Path) -> None:

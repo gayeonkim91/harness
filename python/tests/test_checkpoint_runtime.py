@@ -31,7 +31,7 @@ def _write_state(
         task_root / "state.json",
         HarnessState(
             schema_version=1,
-            session_state=SessionState.ACTIVE,
+            session_state=SessionState.IN_PROGRESS,
             workflow_mode=workflow_mode,
             current_phase=phase,
             repo_profile_ref=repo_profile_ref,

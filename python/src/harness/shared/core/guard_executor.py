@@ -274,8 +274,8 @@ def _run_verify_guard(input_data: GuardInput) -> GuardDecision:
     plan_path = input_data.task_root / "plan.md"
     if state.current_phase != CurrentPhase.VERIFICATION:
         return GuardDecision(False, "VERIFY_PHASE_MISMATCH", "`/wf-verify` requires verification phase.")
-    if state.session_state != SessionState.ACTIVE:
-        return GuardDecision(False, "VERIFY_SESSION_STATE_INVALID", "`/wf-verify` requires active session.")
+    if state.session_state != SessionState.IN_PROGRESS:
+        return GuardDecision(False, "VERIFY_SESSION_STATE_INVALID", "`/wf-verify` requires in_progress session.")
     if state.pending_approval_for is not None:
         return GuardDecision(False, "VERIFY_PENDING_APPROVAL_INVALID", "`/wf-verify` requires no pending approval.")
     if state.current_step_ref is not None:
@@ -297,8 +297,8 @@ def _run_review_guard(input_data: GuardInput) -> GuardDecision:
     plan_path = input_data.task_root / "plan.md"
     if state.current_phase != CurrentPhase.REVIEW:
         return GuardDecision(False, "REVIEW_PHASE_MISMATCH", "`/wf-review` requires review phase.")
-    if state.session_state != SessionState.ACTIVE:
-        return GuardDecision(False, "REVIEW_SESSION_STATE_INVALID", "`/wf-review` requires active session.")
+    if state.session_state != SessionState.IN_PROGRESS:
+        return GuardDecision(False, "REVIEW_SESSION_STATE_INVALID", "`/wf-review` requires in_progress session.")
     if state.pending_approval_for is not None:
         return GuardDecision(False, "REVIEW_PENDING_APPROVAL_INVALID", "`/wf-review` requires no pending approval.")
     if state.current_step_ref is not None:

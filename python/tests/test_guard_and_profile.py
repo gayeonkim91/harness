@@ -264,7 +264,7 @@ def test_guard_blocks_min_level_two_sections_missing(tmp_path: Path) -> None:
 def _checkpoint_state(phase: CurrentPhase, current_step_ref: str | None = None) -> HarnessState:
     return HarnessState(
         schema_version=1,
-        session_state=SessionState.ACTIVE,
+        session_state=SessionState.IN_PROGRESS,
         workflow_mode=WorkflowMode.GENERIC,
         current_phase=phase,
         repo_profile_ref=None,

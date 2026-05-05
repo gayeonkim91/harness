@@ -38,7 +38,7 @@ def _write_state(
     baseline_ref: str | None,
     *,
     phase: CurrentPhase = CurrentPhase.VERIFICATION,
-    session_state: SessionState = SessionState.ACTIVE,
+    session_state: SessionState = SessionState.IN_PROGRESS,
     pending_approval_for: str | None = None,
     current_step_ref: str | None = None,
     latest_checkpoint_ref: str | None = "logs/checkpoints/checkpoint.json",

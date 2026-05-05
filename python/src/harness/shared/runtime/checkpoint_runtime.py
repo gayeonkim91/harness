@@ -149,6 +149,7 @@ def _with_latest_checkpoint_ref(state: HarnessState, checkpoint_ref: str) -> Har
         blocked_reason_ref=state.blocked_reason_ref,
         stop_condition_ref=state.stop_condition_ref,
         last_updated=kst_now_human(),
+        approvals_granted=state.approvals_granted,
         adapter_meta=state.adapter_meta,
     )
 
