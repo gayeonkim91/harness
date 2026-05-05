@@ -149,6 +149,17 @@ tool-specific 차이를 제외한 `/wf-*` semantic contract, artifact ownership,
 - initialized task에서는 `state.json.workflow_mode`, `state.json.repo_profile_ref`가 canonical source of truth다
 - downstream skill은 caller가 넘긴 string을 신뢰하지 않고, 기존 task면 먼저 state를 읽고 pinned mode/profile을 따라야 한다
 - `state.json.workflow_mode=guided`인데 `state.json.repo_profile_ref`를 읽을 수 없으면 해당 skill은 자신의 guard reason으로 차단한다
+- `/wf-start` 진입 전 workflow kind는 `runbook | docs_only | discussion_only | unknown` 중 하나로 resolve한다
+- `runbook`은 기존 plan/steps/state/logs artifact를 생성하는 실행 workflow다
+- `docs_only`, `discussion_only`, `unknown`은 PR3 기준 document-workflow 본체가 없으므로 `/wf-start` artifact scaffold 대상이 아니다
+- shared `start.mode_resolver`는 LLM이 넘긴 `workflow_kind_hint`를 primary input으로 쓰고, `request_path_refs`의 코드/문서 path 단서로 보조 검증한다
+- `workflow_kind_hint`가 없고 path 단서도 없으면 `workflow_kind=unknown`, `workflow_kind_resolved=false`로 반환해 artifact 생성을 막는다
+- 문서 확장자(`.md`, `.mdx`, `.rst`, `.adoc`, `.txt`)나 `docs/` 계열 경로는 `python`, `src`, `tests` 같은 코드 디렉토리명보다 우선해서 문서 단서로 본다
+- 코드 단서와 문서 단서가 섞이면 path-only 판정은 `workflow_kind=unknown`으로 낮춘다
+- 코드 단서와 문서 단서가 섞였더라도 `workflow_kind_hint=runbook`이면 코드 변경과 문서 갱신을 함께 하는 정상 runbook으로 허용한다
+- 단일 path가 문서 단서와 코드 단서를 동시에 가지는 경우(예: `docs/scripts/setup.py`)도 mixed path로 본다
+- `workflow_kind_hint=runbook`인데 path 단서가 순수 문서-only를 가리키거나, `workflow_kind_hint=docs_only | discussion_only`인데 path 단서가 코드 실행 workflow를 가리키면 `workflow_kind=unknown`으로 낮춰 artifact 생성을 막는다
+- `workflow_kind`는 PR3 기준 pre-start routing input이며 `state.json`에는 저장하지 않는다. PR6 `docs_only_runtime` 등 비-runbook 상태 모델 도입 시 별도 schema 변경으로 다룬다
 
 ### task-scoped diff baseline
 
@@ -219,10 +230,15 @@ tool-specific 차이를 제외한 `/wf-*` semantic contract, artifact ownership,
 - `user_request`
 - `task_name_hint` (optional)
 - `workflow_mode_resolved` (shared `start.mode_resolver`가 mode를 확정했는지 나타내는 boolean)
+- `workflow_kind` (`runbook | docs_only | discussion_only | unknown`)
+- `workflow_kind_resolved` (shared `start.mode_resolver`가 kind를 확정했는지 나타내는 boolean)
 
 입력 원칙:
 - `user_request`는 task classification과 initial phase 판정의 primary input이다
 - `workflow_mode_resolved=true`여야 `/wf-start`가 mode 입력을 신뢰할 수 있다
+- `workflow_kind=runbook`일 때만 `/wf-start`가 task artifact scaffold를 만든다
+- `workflow_kind=docs_only | discussion_only | unknown`이면 `reason_code=START_NOT_RUNBOOK`으로 차단하고 artifact를 만들지 않는다
+- `workflow_kind_resolved=false`이면 `workflow_kind=runbook` 값이 있더라도 unresolved로 보고 `reason_code=START_NOT_RUNBOOK`으로 차단한다
 - `/wf-start`는 broad codebase exploration 없이, active repo onboarding profile과 사용자 요청만으로 최초 분류와 최소 읽기 목록을 결정하는 것을 기본값으로 한다
 - `task_name_hint`는 directory/file naming 보조일 뿐 classification source of truth가 아니다
 - active repo onboarding profile이 configured 상태인데 읽을 수 없으면 `reason_code=START_REPO_PROFILE_UNAVAILABLE`로 차단한다
@@ -236,6 +252,7 @@ tool-specific 차이를 제외한 `/wf-*` semantic contract, artifact ownership,
 - `user_request`가 비어 있으면 `reason_code=START_REQUEST_MISSING`으로 차단한다
 - `workflow_mode_resolved != true`면 `reason_code=START_WORKFLOW_MODE_UNRESOLVED`로 차단한다
 - runtime entry에서는 `start.mode_resolver`를 재실행하므로 이 reason은 주로 shared guard direct-call / adapter preflight용 defense-in-depth다
+- `workflow_kind != runbook`이거나 `workflow_kind_resolved=false`이면 `reason_code=START_NOT_RUNBOOK`으로 차단한다
 - active repo profile이 있는 workspace에서 resolved `workflow_mode=generic`이 들어오면 `reason_code=START_WORKFLOW_MODE_CONFLICT`로 차단한다
 - `task_root`가 없으면 `/wf-start`가 생성할 수 있어야 한다
 - target `task_root`에 canonical workflow artifact(`plan.md`, `steps.md`, `state.json`, `logs/`)가 모두 있으면 `reason_code=START_TASK_ALREADY_INITIALIZED`로 차단한다
@@ -254,6 +271,7 @@ tool-specific 차이를 제외한 `/wf-*` semantic contract, artifact ownership,
 - `START_WORKSPACE_ROOT_MISSING`
 - `START_REQUEST_MISSING`
 - `START_WORKFLOW_MODE_UNRESOLVED`
+- `START_NOT_RUNBOOK`
 - `START_WORKFLOW_MODE_CONFLICT`
 - `START_TASK_ALREADY_INITIALIZED`
 - `START_TASK_INIT_PARTIAL`
@@ -278,6 +296,9 @@ guard 해석 원칙:
   - shared mode resolver가 실행됐다는 신뢰 표식 없이 guard가 직접 호출된 상태다
 - `START_WORKFLOW_MODE_CONFLICT`
   - active profile이 있는 workspace에서 generic mode로 guard를 직접 통과하려는 상태다. runtime entry에서는 resolver 재실행으로 보통 도달하지 않는 guard-only safeguard다
+- `START_NOT_RUNBOOK`
+  - workflow kind가 `runbook`이 아니어서 현재 `/wf-start`가 plan/steps/state/logs scaffold를 만들 수 없는 상태다
+  - PR3에서는 document-only 본체가 아직 없으므로 이 reason은 정상 차단 결과다
 - `START_INITIAL_PHASE_INVALID`
   - `/wf-start`가 직접 시작할 수 없는 phase(`step | implementation | verification | review`)가 입력된 상태다
 - `START_CLASSIFICATION_INVALID`

@@ -38,6 +38,7 @@ def test_execute_start_runtime_blocks_reinitialization(tmp_path: Path) -> None:
             minimum_read_set=[],
             phase_doc_ref="phases/plan.md",
             user_request="첫 시작",
+            workflow_kind="runbook",
             workspace_root=workspace_root,
             workflow_mode_resolved=True,
         )
@@ -53,6 +54,7 @@ def test_execute_start_runtime_blocks_reinitialization(tmp_path: Path) -> None:
             minimum_read_set=[],
             phase_doc_ref="phases/plan.md",
             user_request="다시 시작",
+            workflow_kind="runbook",
             workspace_root=workspace_root,
             workflow_mode_resolved=True,
         )
@@ -83,6 +85,7 @@ def test_execute_start_runtime_initializes_generic_verification_contract(tmp_pat
             minimum_read_set=[],
             phase_doc_ref="phases/plan.md",
             user_request="검증 계약 생성",
+            workflow_kind="runbook",
             workspace_root=workspace_root,
             workflow_mode_resolved=True,
         )
@@ -97,6 +100,229 @@ def test_execute_start_runtime_initializes_generic_verification_contract(tmp_pat
     assert "gate_source: generic fallback" in plan
     assert "Task-appropriate verification gate" in plan
     assert "<define before verification>" in plan
+
+
+def test_execute_start_runtime_blocks_non_runbook_without_artifacts(tmp_path: Path) -> None:
+    workspace_root = tmp_path / "workspace"
+    task_root = tmp_path / "task"
+    workspace_root.mkdir()
+
+    result = execute_start_runtime(
+        StartRuntimeInput(
+            task_root=task_root,
+            task_name="docs-only",
+            workflow_mode="generic",
+            repo_profile_ref=None,
+            workflow_kind="docs_only",
+            task_classification="generic",
+            initial_phase="plan",
+            minimum_read_set=[],
+            phase_doc_ref="phases/plan.md",
+            user_request="README 문서만 정리",
+            workspace_root=workspace_root,
+            workflow_mode_resolved=True,
+        )
+    )
+
+    assert result["reason_code"] == "START_NOT_RUNBOOK"
+    assert result["created_artifacts"] == []
+    assert not (task_root / "plan.md").exists()
+    assert not (task_root / "steps.md").exists()
+    assert not (task_root / "state.json").exists()
+    assert not (task_root / "logs").exists()
+
+
+def test_execute_start_runtime_blocks_missing_workflow_kind_without_artifacts(tmp_path: Path) -> None:
+    workspace_root = tmp_path / "workspace"
+    task_root = tmp_path / "task"
+    workspace_root.mkdir()
+
+    result = execute_start_runtime(
+        StartRuntimeInput(
+            task_root=task_root,
+            task_name="missing-kind",
+            workflow_mode="generic",
+            repo_profile_ref=None,
+            task_classification="generic",
+            initial_phase="plan",
+            minimum_read_set=[],
+            phase_doc_ref="phases/plan.md",
+            user_request="분류 누락",
+            workspace_root=workspace_root,
+            workflow_mode_resolved=True,
+        )
+    )
+
+    assert result["reason_code"] == "START_NOT_RUNBOOK"
+    assert result["created_artifacts"] == []
+    assert not task_root.exists()
+
+
+def test_execute_start_runtime_blocks_discussion_only_without_artifacts(tmp_path: Path) -> None:
+    workspace_root = tmp_path / "workspace"
+    task_root = tmp_path / "task"
+    workspace_root.mkdir()
+
+    result = execute_start_runtime(
+        StartRuntimeInput(
+            task_root=task_root,
+            task_name="discussion-only",
+            workflow_mode="generic",
+            repo_profile_ref=None,
+            workflow_kind="discussion_only",
+            task_classification="generic",
+            initial_phase="plan",
+            minimum_read_set=[],
+            phase_doc_ref="phases/plan.md",
+            user_request="방향만 논의",
+            workspace_root=workspace_root,
+            workflow_mode_resolved=True,
+        )
+    )
+
+    assert result["reason_code"] == "START_NOT_RUNBOOK"
+    assert result["created_artifacts"] == []
+    assert not task_root.exists()
+
+
+def test_execute_start_runtime_blocks_explicit_unknown_kind_without_artifacts(tmp_path: Path) -> None:
+    workspace_root = tmp_path / "workspace"
+    task_root = tmp_path / "task"
+    workspace_root.mkdir()
+
+    result = execute_start_runtime(
+        StartRuntimeInput(
+            task_root=task_root,
+            task_name="unknown-kind",
+            workflow_mode="generic",
+            repo_profile_ref=None,
+            workflow_kind="unknown",
+            task_classification="generic",
+            initial_phase="plan",
+            minimum_read_set=[],
+            phase_doc_ref="phases/plan.md",
+            user_request="애매한 요청",
+            workspace_root=workspace_root,
+            workflow_mode_resolved=True,
+        )
+    )
+
+    assert result["reason_code"] == "START_NOT_RUNBOOK"
+    assert result["created_artifacts"] == []
+    assert not task_root.exists()
+
+
+def test_execute_start_runtime_blocks_docs_path_clue_without_kind_hint(tmp_path: Path) -> None:
+    workspace_root = tmp_path / "workspace"
+    task_root = tmp_path / "task"
+    workspace_root.mkdir()
+
+    result = execute_start_runtime(
+        StartRuntimeInput(
+            task_root=task_root,
+            task_name="docs-path",
+            workflow_mode="generic",
+            repo_profile_ref=None,
+            task_classification="generic",
+            initial_phase="plan",
+            minimum_read_set=[],
+            phase_doc_ref="phases/plan.md",
+            user_request="README 문서만 정리",
+            request_path_refs=["README.md"],
+            workspace_root=workspace_root,
+            workflow_mode_resolved=True,
+        )
+    )
+
+    assert result["reason_code"] == "START_NOT_RUNBOOK"
+    assert result["created_artifacts"] == []
+    assert not task_root.exists()
+
+
+def test_execute_start_runtime_blocks_runbook_hint_with_docs_only_paths(tmp_path: Path) -> None:
+    workspace_root = tmp_path / "workspace"
+    task_root = tmp_path / "task"
+    workspace_root.mkdir()
+
+    result = execute_start_runtime(
+        StartRuntimeInput(
+            task_root=task_root,
+            task_name="docs-path-conflict",
+            workflow_mode="generic",
+            repo_profile_ref=None,
+            workflow_kind="runbook",
+            task_classification="generic",
+            initial_phase="plan",
+            minimum_read_set=[],
+            phase_doc_ref="phases/plan.md",
+            user_request="README 문서만 정리",
+            request_path_refs=["docs/python/guide.md"],
+            workspace_root=workspace_root,
+            workflow_mode_resolved=True,
+        )
+    )
+
+    assert result["reason_code"] == "START_NOT_RUNBOOK"
+    assert result["created_artifacts"] == []
+    assert not task_root.exists()
+
+
+def test_execute_start_runtime_allows_runbook_hint_with_mixed_code_docs_paths(tmp_path: Path) -> None:
+    workspace_root = tmp_path / "workspace"
+    task_root = tmp_path / "task"
+    workspace_root.mkdir()
+
+    result = execute_start_runtime(
+        StartRuntimeInput(
+            task_root=task_root,
+            task_name="mixed-runbook",
+            workflow_mode="generic",
+            repo_profile_ref=None,
+            workflow_kind="runbook",
+            task_classification="generic",
+            initial_phase="plan",
+            minimum_read_set=[],
+            phase_doc_ref="phases/plan.md",
+            user_request="코드 변경 후 문서 갱신",
+            request_path_refs=["src/service.py", "docs/guide.md"],
+            workspace_root=workspace_root,
+            workflow_mode_resolved=True,
+        )
+    )
+
+    assert result["reason_code"] is None
+    assert (task_root / "plan.md").exists()
+    assert (task_root / "steps.md").exists()
+    assert (task_root / "state.json").exists()
+    assert (task_root / "logs").exists()
+
+
+def test_execute_start_runtime_blocks_runbook_hint_with_txt_doc_path(tmp_path: Path) -> None:
+    workspace_root = tmp_path / "workspace"
+    task_root = tmp_path / "task"
+    workspace_root.mkdir()
+
+    result = execute_start_runtime(
+        StartRuntimeInput(
+            task_root=task_root,
+            task_name="txt-doc",
+            workflow_mode="generic",
+            repo_profile_ref=None,
+            workflow_kind="runbook",
+            task_classification="generic",
+            initial_phase="plan",
+            minimum_read_set=[],
+            phase_doc_ref="phases/plan.md",
+            user_request="notes.txt만 정리",
+            request_path_refs=["notes.txt"],
+            workspace_root=workspace_root,
+            workflow_mode_resolved=True,
+        )
+    )
+
+    assert result["reason_code"] == "START_NOT_RUNBOOK"
+    assert result["created_artifacts"] == []
+    assert not task_root.exists()
 
 
 def test_execute_start_runtime_uses_guided_adoption_verification_template(tmp_path: Path) -> None:
@@ -160,6 +386,7 @@ verification_gate_templates:
             phase_doc_ref="phases/plan.md",
             user_request="guided 검증 계약 생성",
             adoption_kind="greenfield",
+            workflow_kind="runbook",
             workspace_root=workspace_root,
             workflow_mode_resolved=True,
         )
@@ -209,6 +436,65 @@ def test_runtime_cli_rejects_invalid_minimum_read_set(monkeypatch, capsys, tmp_p
     assert captured["created_artifacts"] == []
 
 
+def test_runtime_cli_blocks_missing_workflow_kind(monkeypatch, capsys, tmp_path: Path) -> None:
+    workspace_root = tmp_path / "workspace"
+    task_root = tmp_path / "cli-missing-kind"
+    workspace_root.mkdir()
+    payload = {
+        "task_root": str(task_root),
+        "task_name": "cli-missing-kind",
+        "workflow_mode": "generic",
+        "repo_profile_ref": None,
+        "task_classification": "generic",
+        "initial_phase": "plan",
+        "minimum_read_set": [],
+        "phase_doc_ref": "phases/plan.md",
+        "user_request": "분류 누락",
+        "workspace_root": str(workspace_root),
+        "workflow_mode_resolved": True,
+    }
+    monkeypatch.setattr(sys, "argv", ["harness-runtime", "wf-start-runtime"])
+    monkeypatch.setattr(sys, "stdin", StringIO(json.dumps(payload)))
+
+    exit_code = main()
+    captured = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 0
+    assert captured["reason_code"] == "START_NOT_RUNBOOK"
+    assert captured["created_artifacts"] == []
+    assert not task_root.exists()
+
+
+def test_runtime_cli_blocks_invalid_workflow_kind_as_not_runbook(monkeypatch, capsys, tmp_path: Path) -> None:
+    workspace_root = tmp_path / "workspace"
+    task_root = tmp_path / "cli-invalid-kind"
+    workspace_root.mkdir()
+    payload = {
+        "task_root": str(task_root),
+        "task_name": "cli-invalid-kind",
+        "workflow_mode": "generic",
+        "repo_profile_ref": None,
+        "workflow_kind": "not-a-kind",
+        "task_classification": "generic",
+        "initial_phase": "plan",
+        "minimum_read_set": [],
+        "phase_doc_ref": "phases/plan.md",
+        "user_request": "분류 오류",
+        "workspace_root": str(workspace_root),
+        "workflow_mode_resolved": True,
+    }
+    monkeypatch.setattr(sys, "argv", ["harness-runtime", "wf-start-runtime"])
+    monkeypatch.setattr(sys, "stdin", StringIO(json.dumps(payload)))
+
+    exit_code = main()
+    captured = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 0
+    assert captured["reason_code"] == "START_NOT_RUNBOOK"
+    assert captured["created_artifacts"] == []
+    assert not task_root.exists()
+
+
 def test_execute_start_runtime_re_resolves_caller_generic_in_profile_workspace(tmp_path: Path) -> None:
     result = execute_start_runtime(
         StartRuntimeInput(
@@ -221,6 +507,7 @@ def test_execute_start_runtime_re_resolves_caller_generic_in_profile_workspace(t
             minimum_read_set=[],
             phase_doc_ref="phases/plan.md",
             user_request="mode 검사",
+            workflow_kind="runbook",
             workspace_root=REPO_ROOT,
             workflow_mode_resolved=True,
         )
@@ -291,6 +578,7 @@ def test_execute_start_runtime_blocks_unavailable_explicit_profile(tmp_path: Pat
             phase_doc_ref="phases/plan.md",
             user_request="profile 없음",
             adoption_kind="legacy-medium",
+            workflow_kind="runbook",
             workspace_root=workspace_root,
             workflow_mode_resolved=True,
         )
@@ -315,6 +603,7 @@ def test_execute_start_runtime_blocks_invalid_initial_phase(tmp_path: Path) -> N
             minimum_read_set=[],
             phase_doc_ref="phases/implementation.md",
             user_request="잘못된 phase",
+            workflow_kind="runbook",
             workspace_root=workspace_root,
             workflow_mode_resolved=True,
         )
@@ -341,6 +630,7 @@ def test_execute_start_runtime_blocks_unwritable_task_root(tmp_path: Path) -> No
             minimum_read_set=[],
             phase_doc_ref="phases/plan.md",
             user_request="쓰기 실패",
+            workflow_kind="runbook",
             workspace_root=workspace_root,
             workflow_mode_resolved=True,
         )
@@ -366,6 +656,7 @@ def test_execute_start_runtime_writes_canonical_initial_state(tmp_path: Path) ->
             minimum_read_set=[],
             phase_doc_ref="phases/plan.md",
             user_request="state 확인",
+            workflow_kind="runbook",
             workspace_root=workspace_root,
             workflow_mode_resolved=True,
         )

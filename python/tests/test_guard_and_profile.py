@@ -107,6 +107,8 @@ def test_guard_blocks_generic_mode_when_workspace_profile_exists(tmp_path: Path)
                 "user_request": "generic 우회 검사",
                 "workflow_mode": "generic",
                 "workflow_mode_resolved": True,
+                "workflow_kind": "runbook",
+                "workflow_kind_resolved": True,
                 "workspace_root": REPO_ROOT,
             },
         )
@@ -129,6 +131,8 @@ def test_start_guard_resolves_profile_from_nested_workspace_path(tmp_path: Path)
                 "user_request": "nested profile 검사",
                 "workflow_mode": "generic",
                 "workflow_mode_resolved": True,
+                "workflow_kind": "runbook",
+                "workflow_kind_resolved": True,
                 "workspace_root": nested_root,
             },
         )
@@ -155,6 +159,42 @@ def test_guard_blocks_unresolved_workflow_mode_direct_call(tmp_path: Path) -> No
     assert decision.reason_code == "START_WORKFLOW_MODE_UNRESOLVED"
 
 
+def test_guard_blocks_non_runbook_start(tmp_path: Path) -> None:
+    decision = run_guard(
+        GuardInput(
+            action="wf-start",
+            task_root=tmp_path,
+            context={
+                "user_request": "문서만 정리",
+                "workflow_mode": "generic",
+                "workflow_mode_resolved": True,
+                "workflow_kind": "docs_only",
+                "workflow_kind_resolved": True,
+            },
+        )
+    )
+
+    assert decision.allow is False
+    assert decision.reason_code == "START_NOT_RUNBOOK"
+
+
+def test_guard_blocks_unresolved_workflow_kind_direct_call(tmp_path: Path) -> None:
+    decision = run_guard(
+        GuardInput(
+            action="wf-start",
+            task_root=tmp_path,
+            context={
+                "user_request": "kind unresolved",
+                "workflow_mode": "generic",
+                "workflow_mode_resolved": True,
+            },
+        )
+    )
+
+    assert decision.allow is False
+    assert decision.reason_code == "START_NOT_RUNBOOK"
+
+
 def test_guard_blocks_missing_required_initialization_doc(tmp_path: Path) -> None:
     _write_profile(
         tmp_path,
@@ -175,6 +215,8 @@ def test_guard_blocks_missing_required_initialization_doc(tmp_path: Path) -> Non
                 "user_request": "문서 없음",
                 "workflow_mode": "guided",
                 "workflow_mode_resolved": True,
+                "workflow_kind": "runbook",
+                "workflow_kind_resolved": True,
                 "repo_profile_ref": "contracts/repo_profile.md",
                 "adoption_kind": "legacy-small",
                 "workspace_root": tmp_path,
@@ -209,6 +251,8 @@ def test_guard_blocks_required_initialization_header_missing(tmp_path: Path) -> 
                 "user_request": "헤더 없음",
                 "workflow_mode": "guided",
                 "workflow_mode_resolved": True,
+                "workflow_kind": "runbook",
+                "workflow_kind_resolved": True,
                 "repo_profile_ref": "contracts/repo_profile.md",
                 "adoption_kind": "legacy-small",
                 "workspace_root": tmp_path,
@@ -250,6 +294,8 @@ def test_guard_blocks_min_level_two_sections_missing(tmp_path: Path) -> None:
                 "user_request": "known issue 부족",
                 "workflow_mode": "guided",
                 "workflow_mode_resolved": True,
+                "workflow_kind": "runbook",
+                "workflow_kind_resolved": True,
                 "repo_profile_ref": "contracts/repo_profile.md",
                 "adoption_kind": "legacy-large",
                 "workspace_root": tmp_path,

@@ -9,6 +9,7 @@ from harness.runtime_cli import main
 from harness.shared.core.repo_profile_loader import load_repo_profile
 from harness.shared.core.start_mode_resolver import StartModeResolverInput, resolve_start_mode
 from harness.shared.contracts.state import WorkflowMode
+from harness.shared.contracts.workflow import WorkflowKind
 from harness.shared.runtime import start_runtime as start_runtime_module
 from harness.shared.runtime.start_runtime import StartRuntimeInput, execute_start_runtime
 
@@ -27,6 +28,8 @@ def test_resolve_start_mode_uses_workspace_convention() -> None:
     assert result.workflow_mode == WorkflowMode.GUIDED
     assert result.repo_profile_ref == "contracts/repo_profile.md"
     assert result.adoption_kind == "legacy-medium"
+    assert result.workflow_kind == WorkflowKind.UNKNOWN
+    assert result.workflow_kind_resolved is False
     assert result.workflow_mode_resolved is True
     assert result.resolution_source == "workspace_convention"
 
@@ -37,6 +40,7 @@ def test_resolve_start_mode_falls_back_to_generic_without_profile(tmp_path: Path
     assert result.workflow_mode == WorkflowMode.GENERIC
     assert result.repo_profile_ref is None
     assert result.adoption_kind is None
+    assert result.workflow_kind == WorkflowKind.UNKNOWN
     assert result.workflow_mode_resolved is True
     assert result.resolution_source == "no_active_profile"
 
@@ -55,11 +59,175 @@ def test_resolve_start_mode_keeps_explicit_profile_for_guard_validation(tmp_path
     assert result.workflow_mode_resolved is True
 
 
+def test_resolve_start_mode_uses_workflow_kind_hint() -> None:
+    result = resolve_start_mode(
+        StartModeResolverInput(
+            workspace_root=REPO_ROOT,
+            adoption_kind="legacy-medium",
+            workflow_kind_hint="runbook",
+        )
+    )
+
+    assert result.workflow_kind == WorkflowKind.RUNBOOK
+    assert result.workflow_kind_resolved is True
+    assert result.workflow_kind_source == "workflow_kind_hint"
+
+
+def test_resolve_start_mode_uses_docs_path_clue_without_hint(tmp_path: Path) -> None:
+    result = resolve_start_mode(
+        StartModeResolverInput(
+            workspace_root=tmp_path,
+            request_path_refs=["docs/decision-record.md", "README.md"],
+        )
+    )
+
+    assert result.workflow_kind == WorkflowKind.DOCS_ONLY
+    assert result.workflow_kind_resolved is True
+    assert result.workflow_kind_source == "path_docs_clue"
+
+
+def test_resolve_start_mode_treats_txt_path_as_docs_without_hint(tmp_path: Path) -> None:
+    result = resolve_start_mode(
+        StartModeResolverInput(
+            workspace_root=tmp_path,
+            request_path_refs=["notes.txt"],
+        )
+    )
+
+    assert result.workflow_kind == WorkflowKind.DOCS_ONLY
+    assert result.workflow_kind_resolved is True
+    assert result.workflow_kind_source == "path_docs_clue"
+
+
+def test_resolve_start_mode_treats_docs_directory_as_docs_before_code_dir_name(tmp_path: Path) -> None:
+    result = resolve_start_mode(
+        StartModeResolverInput(
+            workspace_root=tmp_path,
+            request_path_refs=["docs/python/guide.md", "python/docs/foo.md"],
+        )
+    )
+
+    assert result.workflow_kind == WorkflowKind.DOCS_ONLY
+    assert result.workflow_kind_resolved is True
+    assert result.workflow_kind_source == "path_docs_clue"
+
+
+def test_resolve_start_mode_rejects_docs_hint_with_code_path_clue(tmp_path: Path) -> None:
+    result = resolve_start_mode(
+        StartModeResolverInput(
+            workspace_root=tmp_path,
+            workflow_kind_hint="docs_only",
+            request_path_refs=["python/src/example.py"],
+        )
+    )
+
+    assert result.workflow_kind == WorkflowKind.UNKNOWN
+    assert result.workflow_kind_resolved is False
+    assert result.workflow_kind_source == "workflow_kind_hint_path_conflict"
+
+
+def test_resolve_start_mode_rejects_runbook_hint_with_docs_only_path_clue(tmp_path: Path) -> None:
+    result = resolve_start_mode(
+        StartModeResolverInput(
+            workspace_root=tmp_path,
+            workflow_kind_hint="runbook",
+            request_path_refs=["README.md", "docs/guide.md"],
+        )
+    )
+
+    assert result.workflow_kind == WorkflowKind.UNKNOWN
+    assert result.workflow_kind_resolved is False
+    assert result.workflow_kind_source == "workflow_kind_hint_path_conflict"
+
+
+def test_resolve_start_mode_marks_mixed_code_docs_paths_unknown_without_hint(tmp_path: Path) -> None:
+    result = resolve_start_mode(
+        StartModeResolverInput(
+            workspace_root=tmp_path,
+            request_path_refs=["src/service.py", "docs/guide.md"],
+        )
+    )
+
+    assert result.workflow_kind == WorkflowKind.UNKNOWN
+    assert result.workflow_kind_resolved is False
+    assert result.workflow_kind_source == "path_mixed_clue"
+
+
+def test_resolve_start_mode_allows_runbook_hint_with_mixed_code_docs_paths(tmp_path: Path) -> None:
+    result = resolve_start_mode(
+        StartModeResolverInput(
+            workspace_root=tmp_path,
+            workflow_kind_hint="runbook",
+            request_path_refs=["src/service.py", "docs/guide.md"],
+        )
+    )
+
+    assert result.workflow_kind == WorkflowKind.RUNBOOK
+    assert result.workflow_kind_resolved is True
+    assert result.workflow_kind_source == "workflow_kind_hint"
+
+
+def test_resolve_start_mode_allows_runbook_hint_with_single_mixed_path(tmp_path: Path) -> None:
+    result = resolve_start_mode(
+        StartModeResolverInput(
+            workspace_root=tmp_path,
+            workflow_kind_hint="runbook",
+            request_path_refs=["docs/scripts/setup.py"],
+        )
+    )
+
+    assert result.workflow_kind == WorkflowKind.RUNBOOK
+    assert result.workflow_kind_resolved is True
+    assert result.workflow_kind_source == "workflow_kind_hint"
+
+
+def test_resolve_start_mode_uses_discussion_hint_without_path_refs(tmp_path: Path) -> None:
+    result = resolve_start_mode(
+        StartModeResolverInput(
+            workspace_root=tmp_path,
+            workflow_kind_hint="discussion_only",
+        )
+    )
+
+    assert result.workflow_kind == WorkflowKind.DISCUSSION_ONLY
+    assert result.workflow_kind_resolved is True
+    assert result.workflow_kind_source == "workflow_kind_hint"
+
+
+def test_resolve_start_mode_keeps_explicit_unknown_hint_unresolved(tmp_path: Path) -> None:
+    result = resolve_start_mode(
+        StartModeResolverInput(
+            workspace_root=tmp_path,
+            workflow_kind_hint="unknown",
+            request_path_refs=["src/service.py"],
+        )
+    )
+
+    assert result.workflow_kind == WorkflowKind.UNKNOWN
+    assert result.workflow_kind_resolved is False
+    assert result.workflow_kind_source == "workflow_kind_hint_unknown_explicit"
+
+
+def test_resolve_start_mode_reports_invalid_workflow_kind_hint(tmp_path: Path) -> None:
+    result = resolve_start_mode(
+        StartModeResolverInput(
+            workspace_root=tmp_path,
+            workflow_kind_hint="not-a-kind",
+            request_path_refs=["src/service.py"],
+        )
+    )
+
+    assert result.workflow_kind == WorkflowKind.UNKNOWN
+    assert result.workflow_kind_resolved is False
+    assert result.workflow_kind_source == "workflow_kind_hint_invalid"
+
+
 def test_start_runtime_accepts_resolver_payload(tmp_path: Path) -> None:
     resolved = resolve_start_mode(
         StartModeResolverInput(
             workspace_root=REPO_ROOT,
             adoption_kind="legacy-medium",
+            workflow_kind_hint="runbook",
         )
     )
 
@@ -86,6 +254,7 @@ def test_start_runtime_rejects_unknown_guided_classification(tmp_path: Path) -> 
         StartModeResolverInput(
             workspace_root=REPO_ROOT,
             adoption_kind="legacy-medium",
+            workflow_kind_hint="runbook",
         )
     )
 
@@ -111,6 +280,7 @@ def test_start_runtime_rejects_profile_read_set_mismatch(tmp_path: Path) -> None
         StartModeResolverInput(
             workspace_root=REPO_ROOT,
             adoption_kind="legacy-medium",
+            workflow_kind_hint="runbook",
         )
     )
 
@@ -146,6 +316,7 @@ def test_start_runtime_accepts_reordered_profile_read_set_subset(tmp_path: Path)
         StartModeResolverInput(
             workspace_root=REPO_ROOT,
             adoption_kind="legacy-medium",
+            workflow_kind_hint="runbook",
         )
     )
 
@@ -175,6 +346,7 @@ def test_start_runtime_reuses_guard_loaded_profile(monkeypatch, tmp_path: Path) 
         StartModeResolverInput(
             workspace_root=REPO_ROOT,
             adoption_kind="legacy-medium",
+            workflow_kind_hint="runbook",
         )
     )
 
@@ -196,7 +368,7 @@ def test_start_runtime_reuses_guard_loaded_profile(monkeypatch, tmp_path: Path) 
 
 
 def test_runtime_cli_exposes_start_mode_resolver(monkeypatch, capsys) -> None:
-    payload = {"workspace_root": str(REPO_ROOT), "adoption_kind": "legacy-small"}
+    payload = {"workspace_root": str(REPO_ROOT), "adoption_kind": "legacy-small", "workflow_kind_hint": "runbook"}
     monkeypatch.setattr(sys, "argv", ["harness-runtime", "wf-start-mode-resolver"])
     monkeypatch.setattr(sys, "stdin", StringIO(json.dumps(payload)))
 
@@ -207,4 +379,6 @@ def test_runtime_cli_exposes_start_mode_resolver(monkeypatch, capsys) -> None:
     assert captured["workflow_mode"] == "guided"
     assert captured["repo_profile_ref"] == "contracts/repo_profile.md"
     assert captured["adoption_kind"] == "legacy-small"
+    assert captured["workflow_kind"] == "runbook"
+    assert captured["workflow_kind_resolved"] is True
     assert captured["workflow_mode_resolved"] is True

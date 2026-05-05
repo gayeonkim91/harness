@@ -12,6 +12,7 @@ from harness.shared.core.phase_spec_loader import PhaseSpecLoadError, resolve_wo
 from harness.shared.core.repo_profile_loader import RepoProfileLoadError, load_repo_profile
 from harness.shared.core.start_mode_resolver import DEFAULT_REPO_PROFILE_REF
 from harness.shared.contracts.state import CurrentPhase, GuardStateMutation, HarnessState, SessionState, WorkflowMode
+from harness.shared.contracts.workflow import WorkflowKind
 
 
 CHECKPOINT_PHASES = {
@@ -111,6 +112,15 @@ def run_guard(input_data: GuardInput) -> GuardDecision:
             allow=False,
             reason_code="START_WORKFLOW_MODE_UNRESOLVED",
             message_summary="`/wf-start` requires a workflow_mode resolved by shared mode_resolver.",
+        )
+
+    workflow_kind = str(input_data.context.get("workflow_kind", WorkflowKind.UNKNOWN.value))
+    workflow_kind_resolved = bool(input_data.context.get("workflow_kind_resolved", False))
+    if workflow_kind != WorkflowKind.RUNBOOK.value or not workflow_kind_resolved:
+        return GuardDecision(
+            allow=False,
+            reason_code="START_NOT_RUNBOOK",
+            message_summary="`/wf-start` only creates artifacts for a resolved runbook workflow.",
         )
 
     try:

@@ -8,6 +8,7 @@ from typing import Any
 
 from harness.shared.contracts.profile import ReadTargetKind, RepoProfile, SelectorType, TypedReadEntry
 from harness.shared.contracts.state import CurrentPhase, HarnessCounters, HarnessState, SessionState, WorkflowMode
+from harness.shared.contracts.workflow import WorkflowKind
 from harness.shared.artifacts.plan_artifact import render_initial_verification_contract, scaffold_plan_with_verification
 from harness.shared.artifacts.state_artifact import write_initial_state
 from harness.shared.core.guard_executor import GuardInput, run_guard
@@ -34,6 +35,10 @@ class StartRuntimeInput:
     phase_doc_ref: str = ""
     user_request: str = ""
     adoption_kind: str | None = None
+    workflow_kind: WorkflowKind | str | None = None
+    workflow_kind_resolved: bool = False
+    workflow_kind_hint: WorkflowKind | str | None = None
+    request_path_refs: list[str] = field(default_factory=list)
     workspace_root: Path | None = None
     workflow_mode_resolved: bool = False
     explicit_repo_profile_ref: str | None = None
@@ -44,13 +49,26 @@ class StartRuntimeInput:
             self.workflow_mode = WorkflowMode(self.workflow_mode)
         if isinstance(self.initial_phase, str):
             self.initial_phase = CurrentPhase(self.initial_phase)
+        self.workflow_kind = _coerce_workflow_kind(self.workflow_kind)
+        self.workflow_kind_hint = _coerce_workflow_kind(self.workflow_kind_hint)
         if self.workspace_root is not None:
             self.workspace_root = Path(self.workspace_root)
+        self.request_path_refs = [str(item) for item in self.request_path_refs]
         self.minimum_read_set = [_normalize_read_entry(entry) for entry in self.minimum_read_set]
 
 
 def _kst_timestamp() -> str:
     return kst_now_human()
+
+
+def _coerce_workflow_kind(value: WorkflowKind | str | None) -> WorkflowKind | str | None:
+    if value is None or isinstance(value, WorkflowKind):
+        return value
+    normalized = str(value).strip()
+    try:
+        return WorkflowKind(normalized)
+    except ValueError:
+        return normalized
 
 
 def _normalize_read_entry(entry: TypedReadEntry | dict[str, Any]) -> TypedReadEntry:
@@ -128,16 +146,23 @@ def _validate_guided_profile_input(
 
 
 def _resolve_mode_input(input_data: StartRuntimeInput, workspace_root: Path) -> None:
+    workflow_kind_hint = input_data.workflow_kind_hint
+    if workflow_kind_hint is None and input_data.workflow_kind is not None:
+        workflow_kind_hint = input_data.workflow_kind
     resolved = resolve_start_mode(
         StartModeResolverInput(
             workspace_root=workspace_root,
             explicit_repo_profile_ref=input_data.explicit_repo_profile_ref or input_data.repo_profile_ref,
             adoption_kind=input_data.adoption_kind,
+            workflow_kind_hint=workflow_kind_hint,
+            request_path_refs=input_data.request_path_refs,
         )
     )
     input_data.workflow_mode = resolved.workflow_mode
     input_data.repo_profile_ref = resolved.repo_profile_ref
     input_data.adoption_kind = resolved.adoption_kind
+    input_data.workflow_kind = resolved.workflow_kind
+    input_data.workflow_kind_resolved = resolved.workflow_kind_resolved
     input_data.workflow_mode_resolved = resolved.workflow_mode_resolved
 
 
@@ -163,6 +188,8 @@ def execute_start_runtime(input_data: StartRuntimeInput) -> dict[str, object]:
                 "workflow_mode": input_data.workflow_mode.value,
                 "repo_profile_ref": input_data.repo_profile_ref,
                 "adoption_kind": input_data.adoption_kind,
+                "workflow_kind": input_data.workflow_kind.value if input_data.workflow_kind is not None else None,
+                "workflow_kind_resolved": input_data.workflow_kind_resolved,
                 "workspace_root": workspace_root,
                 "workflow_mode_resolved": input_data.workflow_mode_resolved,
             },
