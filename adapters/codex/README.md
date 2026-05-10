@@ -6,7 +6,7 @@
 - shared `skills/shared/*/SKILL.md`를 Codex surface에 연결
 - preflight guard / metadata / invocation transport만 담당
 - shared skill 의미를 재정의하지 않음
-- 지원해야 하는 shared entrypoint는 `/wf-start`, `/wf-checkpoint`, `/wf-next`, `/wf-apply`, `/wf-verify`, `/wf-review`다
+- 지원해야 하는 shared entrypoint는 `/wf-start`, `/wf-docs-only`, `/wf-checkpoint`, `/wf-next`, `/wf-apply`, `/wf-verify`, `/wf-review`다
 
 원칙:
 - 실행 주체는 Codex skill invocation이다

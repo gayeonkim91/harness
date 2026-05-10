@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from harness.shared.artifacts.plan_artifact import (
+    PlanCurrentState,
     apply_plan_current_state_to_harness_state,
     plan_current_state_from_harness_state,
     read_plan_current_state,
@@ -23,7 +24,7 @@ from harness.shared.contracts.state import (
     SessionState,
     WorkflowMode,
 )
-from harness.shared.core.state_migration import CURRENT_SCHEMA_VERSION, migrate_state_file
+from harness.shared.core.state_migration import CURRENT_SCHEMA_VERSION, StateMigrationError, migrate_state_file
 from harness.shared.core.timestamp import kst_now_human
 
 
@@ -74,12 +75,18 @@ def _read_state_json_payload(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def _reconcile_state_from_plan(state_path: Path, state: HarnessState) -> HarnessState:
+def _read_plan_current_state_for_state(state_path: Path) -> PlanCurrentState | None:
     plan_path = state_path.with_name("plan.md")
     if not plan_path.exists():
-        return state
+        return None
+    try:
+        return read_plan_current_state(plan_path)
+    except OSError as exc:
+        raise StateMigrationError(f"plan mirror cannot be read: {plan_path}") from exc
 
-    plan_current = read_plan_current_state(plan_path)
+
+def _reconcile_state_from_plan(state_path: Path, state: HarnessState) -> HarnessState:
+    plan_current = _read_plan_current_state_for_state(state_path)
     if plan_current is None:
         return state
 
@@ -146,12 +153,16 @@ def read_state(state_path: str | Path) -> HarnessState:
     over state.json for fields present in Current State.
     """
     path = _normalize_path(state_path)
+    plan_current = _read_plan_current_state_for_state(path)
     migration = migrate_state_file(path)
     if migration.payload is None:
         payload = json.loads(path.read_text(encoding="utf-8"))
     else:
         payload = migration.payload
-    return _reconcile_state_from_plan(path, _payload_to_state(payload))
+    state = _payload_to_state(payload)
+    if plan_current is None:
+        return state
+    return apply_plan_current_state_to_harness_state(state, plan_current)
 
 
 def reconcile_state_from_plan(state_path: str | Path) -> HarnessState:
@@ -220,12 +231,14 @@ def apply_deferred_transition_with_apply_result(
     state_path: str | Path,
     transition: DeferredStateTransition,
     apply_result: ApplyResult,
+    *,
+    base_state: HarnessState | None = None,
 ) -> None:
     """Apply a deferred state transition after /wf-apply succeeds."""
     if apply_result.apply_status == ApplyStatus.BLOCKED:
         return
 
-    state = read_state(state_path)
+    state = base_state if base_state is not None else read_state(state_path)
     approvals_granted = (
         transition.approvals_granted if transition.approvals_granted is not None else state.approvals_granted
     )

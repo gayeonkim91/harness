@@ -24,6 +24,7 @@ from harness.shared.contracts.state import (
     WorkflowMode,
     SessionState,
 )
+from harness.shared.core.state_migration import StateMigrationError
 
 
 def test_apply_deferred_transition_sets_current_step_ref_from_apply_result(tmp_path: Path) -> None:
@@ -311,6 +312,43 @@ def test_read_state_uses_plan_current_state_without_writing_state_json(tmp_path:
     assert reconciled.approvals_granted == [1, 2]
     assert read_state(state_path).last_updated == "2026-05-10 13:00:00 KST"
     assert json.loads(state_path.read_text(encoding="utf-8"))["current_phase"] == "plan"
+
+
+def test_read_state_wraps_plan_mirror_read_error_before_migration(tmp_path: Path) -> None:
+    state_path = tmp_path / "state.json"
+    write_state(
+        state_path,
+        HarnessState(
+            schema_version=1,
+            session_state=SessionState.IN_PROGRESS,
+            workflow_mode=WorkflowMode.GENERIC,
+            current_phase=CurrentPhase.PLAN,
+            repo_profile_ref=None,
+            workspace_baseline_ref="logs/workspace-baseline.json",
+            current_step_ref=None,
+            latest_checkpoint_ref=None,
+            latest_verification_ref=None,
+            latest_review_ref=None,
+            pending_approval_for=None,
+            review_outcome=None,
+            closure_authorized=False,
+            counters=HarnessCounters(),
+            blocked_transition=None,
+            blocked_reason_ref=None,
+            stop_condition_ref=None,
+            last_updated="2026-04-19T22:00:00+09:00",
+            adapter_meta={},
+        ),
+    )
+    original_state = json.loads(state_path.read_text(encoding="utf-8"))
+    (tmp_path / "plan.md").mkdir()
+
+    with pytest.raises(StateMigrationError) as exc_info:
+        read_state(state_path)
+
+    assert isinstance(exc_info.value.__cause__, OSError)
+    assert json.loads(state_path.read_text(encoding="utf-8")) == original_state
+    assert not (tmp_path / "state.json.v1.bak").exists()
 
 
 def test_explicit_reconcile_state_from_plan_updates_state_json_mirror(tmp_path: Path) -> None:

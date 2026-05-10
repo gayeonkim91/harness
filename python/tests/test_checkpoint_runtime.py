@@ -79,6 +79,33 @@ def _plan_check_items_with_paraphrased_text() -> list[CheckItem]:
     return items
 
 
+def test_persist_checkpoint_runtime_blocks_plan_mirror_read_error_as_invalid_state(tmp_path: Path) -> None:
+    task_root = tmp_path / "task"
+    (task_root / "logs").mkdir(parents=True)
+    _write_state(task_root)
+    original_state = json.loads((task_root / "state.json").read_text(encoding="utf-8"))
+    (task_root / "plan.md").mkdir()
+
+    result = persist_checkpoint_runtime(
+        CheckpointRuntimeInput(
+            task_root=task_root,
+            workspace_root=REPO_ROOT,
+            checkpoint_result=CheckpointResult(
+                checkpoint_ref="",
+                phase=CurrentPhase.PLAN,
+                judgement_code=JudgementCode.GO,
+                summary="Plan is ready.",
+                check_items=_plan_check_items(),
+                basis_refs=["plan.md#goal"],
+            ),
+        )
+    )
+
+    assert result["reason_code"] == "STATE_ARTIFACT_INVALID"
+    assert json.loads((task_root / "state.json").read_text(encoding="utf-8")) == original_state
+    assert not (task_root / "logs" / "checkpoints").exists()
+
+
 def test_persist_checkpoint_runtime_writes_log_and_updates_state(tmp_path: Path) -> None:
     task_root = tmp_path / "task"
     (task_root / "logs").mkdir(parents=True)

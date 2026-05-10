@@ -4,9 +4,10 @@ import re
 from pathlib import Path
 
 
-REASON_CODE_PATTERN = re.compile(r"\b(?:START|CHECKPOINT|NEXT|APPLY|VERIFY|REVIEW|STATE|PLAN)_[A-Z0-9_]+\b")
+REASON_CODE_PATTERN = re.compile(r"\b(?:START|DOCS_ONLY|CHECKPOINT|NEXT|APPLY|VERIFY|REVIEW|STATE|PLAN)_[A-Z0-9_]+\b")
 NON_REASON_SYMBOLS = {
     "CHECKPOINT_PHASES",
+    "DOCS_ONLY_SCHEMA_VERSION",
     "NEXT_PENDING_AFTER_CURRENT",
     "PLAN_TO_IMPLEMENTATION",
     "PLAN_TEMPLATE",
@@ -23,4 +24,5 @@ def test_runtime_reason_codes_are_documented_in_contract() -> None:
     runtime_codes = set(REASON_CODE_PATTERN.findall(source_text)) - NON_REASON_SYMBOLS
     documented_codes = set(REASON_CODE_PATTERN.findall(contract))
 
+    assert "DOCS_ONLY_STATE_INVALID" in runtime_codes
     assert sorted(runtime_codes - documented_codes) == []

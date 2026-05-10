@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from harness.shared.artifacts.apply_sink import record_apply_partial_recovery
-from harness.shared.artifacts.state_artifact import apply_deferred_transition_with_apply_result
+from harness.shared.artifacts.state_artifact import apply_deferred_transition_with_apply_result, read_state
 from harness.shared.contracts.actions import (
     ArtifactAction,
     ArtifactTarget,
@@ -16,8 +16,16 @@ from harness.shared.contracts.actions import (
     SelectionMode,
 )
 from harness.shared.contracts.results import ApplyResult, ApplyStatus
-from harness.shared.contracts.state import CurrentPhase, DeferredStateTransition, HarnessCounters, ReviewOutcome, SessionState
+from harness.shared.contracts.state import (
+    CurrentPhase,
+    DeferredStateTransition,
+    HarnessCounters,
+    HarnessState,
+    ReviewOutcome,
+    SessionState,
+)
 from harness.shared.core.json_util import to_jsonable
+from harness.shared.core.state_migration import StateMigrationError
 from harness.shared.core.steps_parser import ParsedStep, StepParseResult, find_step, parse_steps
 from harness.shared.core.task_paths import get_task_paths
 
@@ -45,6 +53,12 @@ def execute_apply_runtime(input_data: ApplyRuntimeInput) -> ApplyResult:
     actions = input_data.required_artifact_actions
     plan_actions = [action for action in actions if action.target == ArtifactTarget.PLAN]
     steps_actions = [action for action in actions if action.target == ArtifactTarget.STEPS]
+
+    base_state: HarnessState | None = None
+    if input_data.deferred_state_transition is not None:
+        state_reason, base_state = _validate_deferred_state_precondition(task_paths.state_path)
+        if state_reason is not None:
+            return _blocked(state_reason)
 
     unsupported = _first_unsupported_action(actions)
     if unsupported is not None:
@@ -141,7 +155,12 @@ def execute_apply_runtime(input_data: ApplyRuntimeInput) -> ApplyResult:
         summary="Applied artifact actions." if applied else "No artifact changes.",
     )
     if input_data.deferred_state_transition is not None and result.apply_status != ApplyStatus.BLOCKED:
-        apply_deferred_transition_with_apply_result(task_paths.state_path, input_data.deferred_state_transition, result)
+        apply_deferred_transition_with_apply_result(
+            task_paths.state_path,
+            input_data.deferred_state_transition,
+            result,
+            base_state=base_state,
+        )
     return result
 
 
@@ -211,6 +230,16 @@ def _normalize_transition(payload: dict[str, Any]) -> DeferredStateTransition:
 
 def _blocked(reason_code: str) -> ApplyResult:
     return ApplyResult(apply_status=ApplyStatus.BLOCKED, reason_code=reason_code, summary="Apply blocked.")
+
+
+def _validate_deferred_state_precondition(state_path: Path) -> tuple[str | None, HarnessState | None]:
+    if not state_path.exists():
+        return "STATE_ARTIFACT_MISSING", None
+    try:
+        state = read_state(state_path)
+    except (StateMigrationError, OSError, KeyError, TypeError, ValueError):
+        return "STATE_ARTIFACT_INVALID", None
+    return None, state
 
 
 def _first_unsupported_action(actions: list[ArtifactAction]) -> str | None:

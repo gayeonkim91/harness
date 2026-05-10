@@ -121,6 +121,25 @@ def _review_result(judgement: JudgementCode = JudgementCode.DONE) -> ReviewResul
     )
 
 
+def test_persist_review_runtime_blocks_plan_mirror_read_error_as_invalid_state(tmp_path: Path) -> None:
+    task_root = tmp_path / "task"
+    _write_state(task_root, "logs/workspace-baseline.json", "logs/verification/verification.json")
+    original_state = json.loads((task_root / "state.json").read_text(encoding="utf-8"))
+    (task_root / "plan.md").mkdir()
+
+    result = persist_review_runtime(
+        ReviewRuntimeInput(
+            task_root=task_root,
+            workspace_root=REPO_ROOT,
+            review_result=_review_result(),
+        )
+    )
+
+    assert result["reason_code"] == "STATE_ARTIFACT_INVALID"
+    assert json.loads((task_root / "state.json").read_text(encoding="utf-8")) == original_state
+    assert not (task_root / "logs" / "review").exists()
+
+
 def test_persist_review_runtime_writes_log_and_updates_state(tmp_path: Path) -> None:
     _, task_root, _ = _workspace_with_review_state(tmp_path)
 

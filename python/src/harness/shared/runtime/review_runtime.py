@@ -16,6 +16,7 @@ from harness.shared.core.diff_helper import TaskScopedDiffError, build_task_scop
 from harness.shared.core.guard_executor import GuardInput, run_guard
 from harness.shared.core.json_util import to_jsonable
 from harness.shared.core.phase_spec_loader import PhaseSpec, PhaseSpecLoadError, load_phase_spec, resolve_workspace_root
+from harness.shared.core.state_migration import StateMigrationError
 from harness.shared.core.task_paths import TaskPaths
 from harness.shared.core.task_paths import get_task_paths
 from harness.shared.core.timestamp import kst_now_human, kst_now_iso
@@ -59,7 +60,13 @@ def persist_review_runtime(input_data: ReviewRuntimeInput) -> dict[str, object]:
 
     if not task_paths.state_path.exists():
         return _blocked_review_output("STATE_ARTIFACT_MISSING", "`/wf-review` requires an initialized state.json artifact.")
-    state = read_state(task_paths.state_path)
+    try:
+        state = read_state(task_paths.state_path)
+    except (StateMigrationError, KeyError, TypeError, ValueError):
+        return _blocked_review_output(
+            "STATE_ARTIFACT_INVALID",
+            "`/wf-review` requires a valid runbook state.json artifact.",
+        )
 
     guard_decision = run_guard(GuardInput(action="wf-review", task_root=task_paths.task_root, state=state))
     if not guard_decision.allow:

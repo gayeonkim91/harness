@@ -45,6 +45,10 @@ class StateMigrationError(Exception):
     """Raised when a state.json file cannot be migrated."""
 
 
+class StateKindMismatchError(StateMigrationError):
+    """Raised when a non-runbook state is read through the runbook reader."""
+
+
 def migrate_state_file(state_path: str | Path) -> StateMigrationResult:
     """Migrate or repair a state.json file in place when needed.
 
@@ -57,12 +61,19 @@ def migrate_state_file(state_path: str | Path) -> StateMigrationResult:
         raise StateMigrationError(f"state file not found: {path}")
 
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload_text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise StateMigrationError(f"state file cannot be read: {path}") from exc
+
+    try:
+        payload = json.loads(payload_text)
     except json.JSONDecodeError as exc:
         raise StateMigrationError(f"state file is not valid JSON: {path}") from exc
 
     if not isinstance(payload, dict):
         raise StateMigrationError(f"state file root must be a JSON object: {path}")
+    if payload.get("workflow_kind") == "docs_only":
+        raise StateKindMismatchError(f"state file is docs_only, not runbook: {path}")
 
     from_version = int(payload.get("schema_version", 0))
     if from_version > CURRENT_SCHEMA_VERSION:
@@ -94,11 +105,14 @@ def migrate_state_file(state_path: str | Path) -> StateMigrationResult:
         migrated_payload, rewrites = _apply_v1_to_v2(dict(payload))
         migrated_payload["schema_version"] = CURRENT_SCHEMA_VERSION
 
-    backup_path = _write_backup(path, from_version)
-    path.write_text(
-        json.dumps(migrated_payload, indent=2, ensure_ascii=True) + "\n",
-        encoding="utf-8",
-    )
+    try:
+        backup_path = _write_backup(path, from_version, payload_text)
+        path.write_text(
+            json.dumps(migrated_payload, indent=2, ensure_ascii=True) + "\n",
+            encoding="utf-8",
+        )
+    except OSError as exc:
+        raise StateMigrationError(f"state file cannot be migrated: {path}") from exc
 
     return StateMigrationResult(
         migrated=True,
@@ -110,9 +124,9 @@ def migrate_state_file(state_path: str | Path) -> StateMigrationResult:
     )
 
 
-def _write_backup(path: Path, from_version: int) -> Path:
+def _write_backup(path: Path, from_version: int, payload_text: str) -> Path:
     backup_path = path.parent / f"{path.name}.v{from_version}.bak"
-    backup_path.write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
+    backup_path.write_text(payload_text, encoding="utf-8")
     return backup_path
 
 

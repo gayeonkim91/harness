@@ -9,6 +9,7 @@ from harness.shared.artifacts.state_artifact import read_state
 from harness.shared.contracts.state import SessionState
 from harness.shared.core.state_migration import (
     CURRENT_SCHEMA_VERSION,
+    StateKindMismatchError,
     StateMigrationError,
     migrate_state_file,
 )
@@ -220,12 +221,47 @@ def test_migrate_missing_file_raises(tmp_path: Path) -> None:
         migrate_state_file(tmp_path / "missing.json")
 
 
+def test_migrate_unreadable_state_path_raises_state_migration_error(tmp_path: Path) -> None:
+    state_path = tmp_path / "state.json"
+    state_path.mkdir()
+
+    with pytest.raises(StateMigrationError) as exc_info:
+        migrate_state_file(state_path)
+
+    assert isinstance(exc_info.value.__cause__, OSError)
+
+
 def test_migrate_unknown_schema_version_raises(tmp_path: Path) -> None:
     state_path = tmp_path / "state.json"
     _write(state_path, _v1_payload(schema_version=0))
 
     with pytest.raises(StateMigrationError):
         migrate_state_file(state_path)
+
+
+def test_migrate_refuses_docs_only_state_without_rewrite(tmp_path: Path) -> None:
+    state_path = tmp_path / "state.json"
+    payload = {
+        "schema_version": 1,
+        "workflow_kind": "docs_only",
+        "docs_state": "discussion",
+        "user_request": "문서 변경",
+        "target_doc_refs": [],
+        "proposal_ref": None,
+        "diff_ref": None,
+        "applied_ref": None,
+        "last_event_ref": None,
+        "event_history_refs": [],
+        "last_updated": "2026-05-10 12:00:00 KST",
+        "adapter_meta": {},
+    }
+    _write(state_path, payload)
+
+    with pytest.raises(StateKindMismatchError):
+        migrate_state_file(state_path)
+
+    assert json.loads(state_path.read_text(encoding="utf-8")) == payload
+    assert not (tmp_path / "state.json.v1.bak").exists()
 
 
 def test_read_state_auto_migrates_literal_v1_json(tmp_path: Path) -> None:

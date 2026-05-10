@@ -21,6 +21,7 @@ from harness.shared.contracts.results import (
     VerificationResult,
 )
 from harness.shared.contracts.state import CurrentPhase, DeferredStateTransition, HarnessCounters, HarnessState, ReviewOutcome, SessionState
+from harness.shared.core.state_migration import StateMigrationError
 from harness.shared.core.steps_parser import parse_steps
 from harness.shared.core.task_paths import get_task_paths
 
@@ -53,7 +54,14 @@ def execute_next_runtime(input_data: NextRuntimeInput) -> NextResult:
     """
 
     task_paths = get_task_paths(input_data.task_root)
-    state = read_state(task_paths.state_path)
+    try:
+        state = read_state(task_paths.state_path)
+    except (StateMigrationError, KeyError, TypeError, ValueError):
+        return _blocked_result_without_state(
+            input_data,
+            reason_code="STATE_ARTIFACT_INVALID",
+            routing_basis_ref="state.json",
+        )
 
     if input_data.source not in {"checkpoint", "verify", "review", "approval"}:
         return _blocked_result(
@@ -462,6 +470,23 @@ def _blocked_result(
             stop_condition_ref=state.stop_condition_ref,
             approvals_granted=state.approvals_granted,
         ),
+    )
+
+
+def _blocked_result_without_state(
+    input_data: NextRuntimeInput,
+    *,
+    reason_code: str,
+    routing_basis_ref: str,
+) -> NextResult:
+    return NextResult(
+        next_phase=input_data.current_phase,
+        next_session_state=SessionState.PAUSED,
+        pending_approval_for=input_data.pending_approval_for,
+        required_artifact_actions=[],
+        reason_code=reason_code,
+        routing_basis_ref=routing_basis_ref,
+        deferred_state_transition=None,
     )
 
 

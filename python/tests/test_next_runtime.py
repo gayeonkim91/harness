@@ -60,6 +60,29 @@ def _write_steps(task_root: Path, body: str) -> None:
     (task_root / "steps.md").write_text(f"# Steps\n\n## Steps\n\n{body}\n\n## Working Notes\n", encoding="utf-8")
 
 
+def test_next_runtime_blocks_plan_mirror_read_error_as_invalid_state(tmp_path: Path) -> None:
+    task_root = tmp_path / "task"
+    task_root.mkdir()
+    _write_state(task_root, CurrentPhase.PLAN)
+    original_state = json.loads((task_root / "state.json").read_text(encoding="utf-8"))
+    (task_root / "plan.md").mkdir()
+
+    result = execute_next_runtime(
+        NextRuntimeInput(
+            task_root=task_root,
+            source="checkpoint",
+            current_phase=CurrentPhase.PLAN,
+            pending_approval_for=None,
+            resolved_result_ref=None,
+            judgement_code=JudgementCode.GO,
+        )
+    )
+
+    assert result.reason_code == "STATE_ARTIFACT_INVALID"
+    assert result.routing_basis_ref == "state.json"
+    assert json.loads((task_root / "state.json").read_text(encoding="utf-8")) == original_state
+
+
 def _write_checkpoint(
     task_root: Path,
     phase: str,

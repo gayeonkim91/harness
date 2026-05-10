@@ -166,7 +166,8 @@ tool-specific 차이를 제외한 `/wf-*` semantic contract, artifact ownership,
 - `state.json.workflow_mode=guided`인데 `state.json.repo_profile_ref`를 읽을 수 없으면 해당 skill은 자신의 guard reason으로 차단한다
 - `/wf-start` 진입 전 workflow kind는 `runbook | docs_only | discussion_only | unknown` 중 하나로 resolve한다
 - `runbook`은 기존 plan/steps/state/logs artifact를 생성하는 실행 workflow다
-- `docs_only`, `discussion_only`, `unknown`은 PR3 기준 document-workflow 본체가 없으므로 `/wf-start` artifact scaffold 대상이 아니다
+- `docs_only`, `discussion_only`, `unknown`은 `/wf-start`의 runbook artifact scaffold 대상이 아니다
+- `docs_only` task의 상태 전이는 PR6 `docs_only_runtime`이 별도 `workflow_kind=docs_only` state model로 담당한다
 - shared `start.mode_resolver`는 LLM이 넘긴 `workflow_kind_hint`를 primary input으로 쓰고, `request_path_refs`의 코드/문서 path 단서로 보조 검증한다
 - `workflow_kind_hint`가 없고 path 단서도 없으면 `workflow_kind=unknown`, `workflow_kind_resolved=false`로 반환해 artifact 생성을 막는다
 - 문서 확장자(`.md`, `.mdx`, `.rst`, `.adoc`, `.txt`)나 `docs/` 계열 경로는 `python`, `src`, `tests` 같은 코드 디렉토리명보다 우선해서 문서 단서로 본다
@@ -174,7 +175,8 @@ tool-specific 차이를 제외한 `/wf-*` semantic contract, artifact ownership,
 - 코드 단서와 문서 단서가 섞였더라도 `workflow_kind_hint=runbook`이면 코드 변경과 문서 갱신을 함께 하는 정상 runbook으로 허용한다
 - 단일 path가 문서 단서와 코드 단서를 동시에 가지는 경우(예: `docs/scripts/setup.py`)도 mixed path로 본다
 - `workflow_kind_hint=runbook`인데 path 단서가 순수 문서-only를 가리키거나, `workflow_kind_hint=docs_only | discussion_only`인데 path 단서가 코드 실행 workflow를 가리키면 `workflow_kind=unknown`으로 낮춰 artifact 생성을 막는다
-- `workflow_kind`는 PR3 기준 pre-start routing input이며 `state.json`에는 저장하지 않는다. PR6 `docs_only_runtime` 등 비-runbook 상태 모델 도입 시 별도 schema 변경으로 다룬다
+- runbook `state.json`에서 `workflow_kind`는 pre-start routing input으로만 쓰며 저장하지 않는다
+- docs-only `state.json`은 runbook `HarnessState`와 별개 shape로 `workflow_kind=docs_only`를 top-level에 저장한다
 
 ### task-scoped diff baseline
 
@@ -313,7 +315,7 @@ guard 해석 원칙:
   - active profile이 있는 workspace에서 generic mode로 guard를 직접 통과하려는 상태다. runtime entry에서는 resolver 재실행으로 보통 도달하지 않는 guard-only safeguard다
 - `START_NOT_RUNBOOK`
   - workflow kind가 `runbook`이 아니어서 현재 `/wf-start`가 plan/steps/state/logs scaffold를 만들 수 없는 상태다
-  - PR3에서는 document-only 본체가 아직 없으므로 이 reason은 정상 차단 결과다
+  - document-only 본체가 있더라도 `/wf-start`는 runbook artifact만 담당하므로 이 reason은 정상 차단 결과다. docs-only task는 `/wf-docs-only`로 시작한다
 - `START_INITIAL_PHASE_INVALID`
   - `/wf-start`가 직접 시작할 수 없는 phase(`step | implementation | verification | review`)가 입력된 상태다
 - `START_CLASSIFICATION_INVALID`
@@ -436,6 +438,69 @@ guard 해석 원칙:
 - verification/review result 생성
 - broad codebase exploration 수행
 
+### /wf-docs-only
+
+**목적**
+- `/wf-docs-only`는 문서-only 요청을 runbook plan/steps/checkpoint 흐름과 분리해 추적하는 deterministic helper surface다
+- `/wf-start`는 여전히 `workflow_kind=docs_only` 요청에 대해 `START_NOT_RUNBOOK`을 반환하고 runbook artifact를 만들지 않는다
+- docs-only task가 필요하면 caller는 `wf-docs-only-runtime`을 직접 호출해 docs-only state를 만들고 전이시킨다
+
+**상태 모델**
+- state file: task root의 `state.json`
+- runbook `HarnessState`와 shape가 다르며, runbook runtime은 이 state를 읽지 않는다
+- fields:
+  - `schema_version=1`
+  - `workflow_kind=docs_only`
+  - `docs_state=discussion | proposal_visualized | proposal_accepted | diff_presented | applied`
+  - `user_request`
+  - `target_doc_refs`
+  - `proposal_ref`
+  - `diff_ref`
+  - `applied_ref`
+  - `last_event_ref`
+  - `event_history_refs`
+  - `last_updated`
+  - `adapter_meta`
+- docs-only state는 `session_state`, `current_phase`, `pending_approval_for`, `approvals_granted`를 사용하지 않는다
+
+**전이**
+- `start`: no state -> `discussion`
+- `present_proposal`: `discussion` -> `proposal_visualized`
+- `accept_proposal`: `proposal_visualized` -> `proposal_accepted`
+- `present_diff`: `proposal_accepted` -> `diff_presented`
+- `apply`: `diff_presented` -> `applied`
+- 각 event는 `logs/docs-only/*.json`에 event log를 남기고 `last_event_ref` / `event_history_refs`를 갱신한다
+- `present_proposal`, `present_diff`, `apply`는 caller가 넘긴 `artifact_ref`를 각각 `proposal_ref`, `diff_ref`, `applied_ref`로 저장한다. 없으면 해당 event log ref를 저장한다
+- `accept_proposal`의 `artifact_ref`는 state pointer로 승격하지 않고 event log 근거로만 남긴다
+- start 이후 event의 `adapter_meta`는 기존 state의 `adapter_meta`에 merge하며, 같은 key는 최신 event input이 우선한다
+
+**분리 가드**
+- docs-only runtime은 `plan.md` 또는 `steps.md`가 이미 있는 task root에서 start하지 않는다
+- docs-only runtime은 runbook 승인 event(`GO`, `GO_WITH_NOTE`, `DONE`, `DONE_WITH_NOTE`)를 받으면 차단한다
+- docs-only state payload에 `session_state=awaiting_approval` 또는 runbook `pending_approval_for` token이 섞이면 차단한다
+- docs-only flow에는 `awaiting_approval` 상태가 없다. proposal acceptance는 `accept_proposal` event로만 기록한다
+- docs-only state는 docs-only runtime만 읽는다. runbook state reader는 `workflow_kind=docs_only` state를 runbook v1으로 마이그레이션하거나 재작성하지 않고 `STATE_ARTIFACT_INVALID` 계열 차단으로 처리한다
+
+`/wf-docs-only` reason code inventory:
+- `DOCS_ONLY_KIND_UNRESOLVED`
+- `DOCS_ONLY_KIND_INVALID`
+- `DOCS_ONLY_REQUEST_MISSING`
+- `DOCS_ONLY_ALREADY_INITIALIZED`
+- `DOCS_ONLY_RUNBOOK_ARTIFACT_PRESENT`
+- `DOCS_ONLY_TASK_ROOT_UNWRITABLE`
+- `DOCS_ONLY_STATE_MISSING`
+- `DOCS_ONLY_SUMMARY_MISSING`
+- `DOCS_ONLY_STATE_INVALID`
+- `DOCS_ONLY_EVENT_INVALID`
+- `DOCS_ONLY_TRANSITION_INVALID`
+- `DOCS_ONLY_STATE_UPDATE_FAILED`
+- `DOCS_ONLY_RUNBOOK_APPROVAL_BLOCKED`
+
+**Python helper boundary**
+- helper command: `cd python && PYTHONPATH=src python3 -m harness.runtime_cli wf-docs-only-runtime`
+- Python은 event/state validation, state write, event log write만 담당한다
+- LLM은 문서 proposal과 diff 설명을 사용자에게 보여주고, 해당 단계가 완료됐음을 구조화된 event로 helper에 넘기는 책임만 가진다
+
 ### stop-condition evidence model
 
 - stop-condition hard enforcement의 source of truth는 `state.json` 단독이 아니라 `state.json + relevant result logs`다
@@ -542,6 +607,7 @@ guard 해석 원칙:
 - runtime entry는 명시적인 `workspace_root`를 요구한다. `workspace_root`가 없으면 `reason_code=CHECKPOINT_WORKSPACE_ROOT_MISSING`으로 차단한다
 - `workspace_root`가 task 하위 경로처럼 nested path이면 shared workspace root resolver가 repo/profile/template marker까지 상위 탐색해 canonical workspace root로 정규화한다
 - `state.json`이 없으면 `reason_code=STATE_ARTIFACT_MISSING`으로 차단한다
+- `state.json`이 runbook state가 아니거나 읽을 수 없는 shape이면 `reason_code=STATE_ARTIFACT_INVALID`로 차단하며, 파일을 마이그레이션하거나 재작성하지 않는다
 - `state.json.current_phase`가 canonical이다
 - 입력 `phase`는 checkpoint 템플릿 선택과 호출 의도 확인용이다
 - `phase != state.json.current_phase`이면 override가 아니라 invalid context다
@@ -676,6 +742,7 @@ null 규칙:
 `/wf-checkpoint` reason code inventory:
 - `CHECKPOINT_WORKSPACE_ROOT_MISSING`
 - `STATE_ARTIFACT_MISSING`
+- `STATE_ARTIFACT_INVALID`
 - `CHECKPOINT_PHASE_MISMATCH`
 - `CHECKPOINT_PHASE_UNSUPPORTED`
 - `CHECKPOINT_REPO_PROFILE_UNAVAILABLE`
@@ -808,6 +875,7 @@ null 규칙:
 현재 `/wf-verify` reason code inventory:
 - `VERIFY_WORKSPACE_ROOT_MISSING`
 - `STATE_ARTIFACT_MISSING`
+- `STATE_ARTIFACT_INVALID`
 - `VERIFY_GUARD_BLOCKED`
 - `VERIFY_PHASE_MISMATCH`
 - `VERIFY_SESSION_STATE_INVALID`
@@ -950,6 +1018,7 @@ null 규칙:
 현재 `/wf-review` reason code inventory:
 - `REVIEW_WORKSPACE_ROOT_MISSING`
 - `STATE_ARTIFACT_MISSING`
+- `STATE_ARTIFACT_INVALID`
 - `REVIEW_GUARD_BLOCKED`
 - `REVIEW_PHASE_MISMATCH`
 - `REVIEW_SESSION_STATE_INVALID`
@@ -1027,6 +1096,8 @@ null 규칙:
 **읽는 artifact / 참조**
 항상:
 - `state.json`
+
+`state.json`이 runbook state가 아니거나 읽을 수 없는 shape이면 `/wf-next`는 정상 라우팅을 진행하지 않고 `next_phase=<input current_phase>`, `next_session_state=paused`, `required_artifact_actions=[]`, `reason_code=STATE_ARTIFACT_INVALID`, `routing_basis_ref=state.json`으로 처리한다. 이 경로는 docs-only `state.json`을 runbook v1으로 마이그레이션하거나 재작성하지 않는다.
 
 조건부:
 - `resolved_result_ref != null`이면 해당 최신 결과 artifact
@@ -1172,6 +1243,7 @@ null 규칙:
 이 값은 raw diff나 자유 서술이 아니라 symbolic artifact action이어야 한다.
 
 현재 `/wf-next` checkpoint-slice reason code inventory:
+- `STATE_ARTIFACT_INVALID`
 - `NEXT_SOURCE_UNSUPPORTED`
 - `NEXT_RESULT_REF_MISSING`
 - `NEXT_RESULT_REF_UNREADABLE`
@@ -1284,6 +1356,7 @@ null 규칙:
 - `required_artifact_actions`
 - `plan.md` (`target=plan` action이 하나라도 있으면 필수)
 - `steps.md` (`target=steps` action이 하나라도 있으면 필수)
+- `state.json` (`deferred_state_transition`이 있으면 shared state writer handoff에서 필수)
 
 **steps.md parse contract**
 - `/wf-next`와 `/wf-apply`는 같은 shared steps parser가 해석한 canonical structure를 소비한다
@@ -1306,6 +1379,9 @@ null 규칙:
 **Guard / Precondition**
 - 허용되지 않은 `target` 또는 `action`이 있으면 `reason_code=APPLY_UNSUPPORTED_ACTION`으로 차단한다
 - 필요한 target artifact가 없으면 `reason_code=APPLY_TARGET_ARTIFACT_MISSING`으로 차단한다
+- `deferred_state_transition`이 있는데 `state.json`이 없으면 `reason_code=STATE_ARTIFACT_MISSING`으로 차단한다
+- `deferred_state_transition`이 있는데 `state.json`이 runbook state가 아니거나 읽을 수 없는 shape이면 `reason_code=STATE_ARTIFACT_INVALID`로 차단하며, 파일을 마이그레이션하거나 재작성하지 않는다
+- `STATE_ARTIFACT_MISSING` / `STATE_ARTIFACT_INVALID` precondition은 plan/steps artifact write 전에 평가한다
 - `steps.md`의 canonical execution step에 missing 또는 duplicate `step_ref`가 있으면 `reason_code=APPLY_STEP_REF_INVALID`로 차단한다
 - `steps.md`에 `(go)` marker가 2개 이상이면 `reason_code=APPLY_GO_CARDINALITY_INVALID`로 차단한다
 - `steps.record_working_note`, `steps.clear_current_step`, `steps.rewrite_required`는 `current_step_ref_snapshot`이 필수다
@@ -1333,6 +1409,8 @@ null 규칙:
 - 현재 최소 구현에서 partial recovery record ref는 task root 기준 상대 경로(`logs/apply-recovery/*.json`)다
 
 현재 `/wf-apply` reason code inventory:
+- `STATE_ARTIFACT_MISSING`
+- `STATE_ARTIFACT_INVALID`
 - `APPLY_UNSUPPORTED_ACTION`
 - `APPLY_TARGET_ARTIFACT_MISSING`
 - `APPLY_STEP_REF_INVALID`

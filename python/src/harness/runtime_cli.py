@@ -10,6 +10,7 @@ from pathlib import Path
 from harness.shared.core.json_util import to_jsonable
 from harness.shared.runtime.apply_runtime import ApplyRuntimeInput, execute_apply_runtime
 from harness.shared.runtime.checkpoint_runtime import CheckpointRuntimeInput, persist_checkpoint_runtime
+from harness.shared.runtime.docs_only_runtime import DocsOnlyRuntimeInput, execute_docs_only_runtime
 from harness.shared.core.start_mode_resolver import StartModeResolverInput, resolve_start_mode
 from harness.shared.runtime.next_runtime import NextRuntimeInput, execute_next_runtime
 from harness.shared.runtime.review_runtime import ReviewRuntimeInput, persist_review_runtime
@@ -25,6 +26,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "wf-start-mode-resolver",
             "wf-start-runtime",
             "wf-checkpoint-runtime",
+            "wf-docs-only-runtime",
             "wf-next-runtime",
             "wf-apply-runtime",
             "wf-verify-runtime",
@@ -56,6 +58,8 @@ def _dispatch(helper_name: str, payload: dict[str, object]) -> object:
         return execute_start_runtime(StartRuntimeInput(**payload))
     if helper_name == "wf-checkpoint-runtime":
         return persist_checkpoint_runtime(CheckpointRuntimeInput(**payload))
+    if helper_name == "wf-docs-only-runtime":
+        return execute_docs_only_runtime(DocsOnlyRuntimeInput(**payload))
     if helper_name == "wf-next-runtime":
         return execute_next_runtime(NextRuntimeInput(**payload))
     if helper_name == "wf-apply-runtime":

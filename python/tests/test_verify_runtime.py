@@ -103,6 +103,25 @@ def _verification_result(
     )
 
 
+def test_persist_verify_runtime_blocks_plan_mirror_read_error_as_invalid_state(tmp_path: Path) -> None:
+    task_root = tmp_path / "task"
+    _write_state(task_root, "logs/workspace-baseline.json")
+    original_state = json.loads((task_root / "state.json").read_text(encoding="utf-8"))
+    (task_root / "plan.md").mkdir()
+
+    result = persist_verify_runtime(
+        VerifyRuntimeInput(
+            task_root=task_root,
+            workspace_root=REPO_ROOT,
+            verification_result=_verification_result(),
+        )
+    )
+
+    assert result["reason_code"] == "STATE_ARTIFACT_INVALID"
+    assert json.loads((task_root / "state.json").read_text(encoding="utf-8")) == original_state
+    assert not (task_root / "logs" / "verification").exists()
+
+
 def test_persist_verify_runtime_writes_log_state_and_fingerprint(tmp_path: Path) -> None:
     workspace, task_root, baseline_ref = _workspace_with_baseline(tmp_path)
     _write_plan(task_root)

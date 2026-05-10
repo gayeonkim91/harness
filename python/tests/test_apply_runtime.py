@@ -118,6 +118,147 @@ def test_apply_runtime_applies_plan_and_steps_notes(tmp_path: Path) -> None:
     assert read_state(task_root / "state.json").current_phase == CurrentPhase.STEP
 
 
+def test_apply_runtime_blocks_deferred_transition_against_docs_only_state(tmp_path: Path) -> None:
+    task_root = tmp_path / "task"
+    task_root.mkdir()
+    docs_state = {
+        "schema_version": 1,
+        "workflow_kind": "docs_only",
+        "docs_state": "discussion",
+        "user_request": "문서 변경",
+        "target_doc_refs": [],
+        "proposal_ref": None,
+        "diff_ref": None,
+        "applied_ref": None,
+        "last_event_ref": None,
+        "event_history_refs": [],
+        "last_updated": "2026-05-10 12:00:00 KST",
+        "adapter_meta": {},
+    }
+    (task_root / "state.json").write_text(json.dumps(docs_state, indent=2) + "\n", encoding="utf-8")
+
+    result = execute_apply_runtime(
+        ApplyRuntimeInput(
+            task_root=task_root,
+            required_artifact_actions=[],
+            deferred_state_transition=_transition(CurrentPhase.PLAN),
+        )
+    )
+
+    assert result.apply_status.value == "BLOCKED"
+    assert result.reason_code == "STATE_ARTIFACT_INVALID"
+    assert json.loads((task_root / "state.json").read_text(encoding="utf-8")) == docs_state
+    assert not (task_root / "state.json.v1.bak").exists()
+
+
+def test_apply_runtime_blocks_docs_only_state_before_artifact_writes(tmp_path: Path) -> None:
+    task_root = tmp_path / "task"
+    task_root.mkdir()
+    (task_root / "plan.md").write_text("# Plan\n\n## Contract Notes\n", encoding="utf-8")
+    docs_state = {
+        "schema_version": 1,
+        "workflow_kind": "docs_only",
+        "docs_state": "discussion",
+        "user_request": "문서 변경",
+        "target_doc_refs": [],
+        "proposal_ref": None,
+        "diff_ref": None,
+        "applied_ref": None,
+        "last_event_ref": None,
+        "event_history_refs": [],
+        "last_updated": "2026-05-10 12:00:00 KST",
+        "adapter_meta": {},
+    }
+    (task_root / "state.json").write_text(json.dumps(docs_state, indent=2) + "\n", encoding="utf-8")
+    original_plan = (task_root / "plan.md").read_text(encoding="utf-8")
+
+    result = execute_apply_runtime(
+        ApplyRuntimeInput(
+            task_root=task_root,
+            required_artifact_actions=[
+                ArtifactAction(
+                    target=ArtifactTarget.PLAN,
+                    action="plan.record_contract_note",
+                    params={"note_text": "must not be written", "note_basis_refs": ["plan.md#goal"]},
+                    basis_ref="logs/checkpoints/checkpoint.json",
+                )
+            ],
+            deferred_state_transition=_transition(CurrentPhase.PLAN),
+        )
+    )
+
+    assert result.apply_status.value == "BLOCKED"
+    assert result.reason_code == "STATE_ARTIFACT_INVALID"
+    assert result.updated_artifacts == []
+    assert (task_root / "plan.md").read_text(encoding="utf-8") == original_plan
+    assert json.loads((task_root / "state.json").read_text(encoding="utf-8")) == docs_state
+    assert not (task_root / "state.json.v1.bak").exists()
+
+
+def test_apply_runtime_blocks_missing_state_for_deferred_transition(tmp_path: Path) -> None:
+    task_root = tmp_path / "task"
+    task_root.mkdir()
+
+    result = execute_apply_runtime(
+        ApplyRuntimeInput(
+            task_root=task_root,
+            required_artifact_actions=[],
+            deferred_state_transition=_transition(CurrentPhase.PLAN),
+        )
+    )
+
+    assert result.apply_status.value == "BLOCKED"
+    assert result.reason_code == "STATE_ARTIFACT_MISSING"
+
+
+def test_apply_runtime_blocks_unreadable_state_before_artifact_writes(tmp_path: Path) -> None:
+    task_root = tmp_path / "task"
+    task_root.mkdir()
+    (task_root / "plan.md").write_text("# Plan\n\n## Contract Notes\n", encoding="utf-8")
+    (task_root / "state.json").mkdir()
+    original_plan = (task_root / "plan.md").read_text(encoding="utf-8")
+
+    result = execute_apply_runtime(
+        ApplyRuntimeInput(
+            task_root=task_root,
+            required_artifact_actions=[
+                ArtifactAction(
+                    target=ArtifactTarget.PLAN,
+                    action="plan.record_contract_note",
+                    params={"note_text": "must not be written", "note_basis_refs": ["plan.md#goal"]},
+                    basis_ref="logs/checkpoints/checkpoint.json",
+                )
+            ],
+            deferred_state_transition=_transition(CurrentPhase.PLAN),
+        )
+    )
+
+    assert result.apply_status.value == "BLOCKED"
+    assert result.reason_code == "STATE_ARTIFACT_INVALID"
+    assert result.updated_artifacts == []
+    assert (task_root / "plan.md").read_text(encoding="utf-8") == original_plan
+
+
+def test_apply_runtime_blocks_plan_read_error_during_state_precondition(tmp_path: Path) -> None:
+    task_root = tmp_path / "task"
+    task_root.mkdir()
+    _write_state(task_root)
+    (task_root / "plan.md").mkdir()
+    original_state = json.loads((task_root / "state.json").read_text(encoding="utf-8"))
+
+    result = execute_apply_runtime(
+        ApplyRuntimeInput(
+            task_root=task_root,
+            required_artifact_actions=[],
+            deferred_state_transition=_transition(CurrentPhase.PLAN),
+        )
+    )
+
+    assert result.apply_status.value == "BLOCKED"
+    assert result.reason_code == "STATE_ARTIFACT_INVALID"
+    assert json.loads((task_root / "state.json").read_text(encoding="utf-8")) == original_state
+
+
 def test_apply_runtime_marks_clears_and_selects_next_step(tmp_path: Path) -> None:
     task_root = tmp_path / "task"
     _write_artifacts(task_root)

@@ -15,6 +15,7 @@ from harness.shared.contracts.results import CheckItem, CheckpointResult, Judgem
 from harness.shared.contracts.state import CurrentPhase, HarnessState
 from harness.shared.core.guard_executor import GuardInput, run_guard
 from harness.shared.core.phase_spec_loader import PhaseSpec, PhaseSpecLoadError, load_phase_spec, resolve_workspace_root
+from harness.shared.core.state_migration import StateMigrationError
 from harness.shared.core.task_paths import get_task_paths
 from harness.shared.core.timestamp import kst_now_human, kst_now_iso
 
@@ -240,7 +241,13 @@ def persist_checkpoint_runtime(input_data: CheckpointRuntimeInput) -> dict[str, 
             guard_decision.message_summary,
         )
 
-    state = read_state(task_paths.state_path)
+    try:
+        state = read_state(task_paths.state_path)
+    except (StateMigrationError, KeyError, TypeError, ValueError):
+        return _blocked_checkpoint_output(
+            "STATE_ARTIFACT_INVALID",
+            "`/wf-checkpoint` requires a valid runbook state.json artifact.",
+        )
     result = input_data.checkpoint_result
     guard_decision = run_guard(
         GuardInput(
