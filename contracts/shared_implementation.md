@@ -46,7 +46,17 @@ tool-specific 차이를 제외한 `/wf-*` semantic contract, artifact ownership,
 ### plan.md
 
 - `plan.md`는 작업 계약, 범위, 완료 조건, 검증 계획, 계약 수준의 risk/pending/note를 담는 semantic artifact다
+- `plan.md`의 `Current State` section은 PR5(`PlanCurrentState` parser/writer 도입)부터 workflow 위치와 latest result pointer의 canonical source다
+- `state.json`과 `plan.md`의 Current State가 충돌하면 `plan.md`를 우선한다. shared state reader는 in-memory reconcile만 수행하고, mirror 파일 갱신은 명시 `reconcile_state_from_plan` helper가 담당한다
 - shared runtime은 `plan.md`의 parse 규칙이나 markdown render shape가 shared 구현에 필요한 경우에만 이 문서의 contract를 적용한다
+- `Current State` section parse/render contract:
+  - parse target은 top-level section title이 `Current State` 또는 `현재 상태 (Current State)`인 section이다
+  - section이 없으면 pre-PR5 task로 보고 `state.json`만 읽는다
+  - section이 있으면 아래 machine-readable bullet key를 사용한다
+  - 기존/수동 template처럼 일부 key만 있으면 존재하는 key만 `plan.md` 우선으로 병합하고, 없는 key는 `state.json` mirror 값을 유지한다
+  - keys: `schema_version`, `session_state`, `workflow_mode`, `current_phase`, `repo_profile_ref`, `workspace_baseline_ref`, `current_step_ref`, `latest_checkpoint_ref`, `latest_verification_ref`, `latest_review_ref`, `pending_approval_for`, `review_outcome`, `closure_authorized`, `counters.rework_count`, `counters.rewrite_count`, `counters.rollback_count`, `blocked_transition`, `blocked_reason_ref`, `stop_condition_ref`, `approvals_granted`, `last_updated`
+  - empty value / `null` / `none` / `n/a` / `해당 없음`은 null로 해석한다
+  - display keys `current_step`과 `latest_checkpoint`는 사람이 읽는 요약 전용이며 machine state로 승격하지 않는다. writer는 machine key인 `current_step_ref`와 `latest_checkpoint_ref`를 쓴다
 - `Risks / Pending` section parse/render contract:
   - parse target은 top-level section title이 `Risks / Pending`이거나 `리스크 / 보류 사항 (Risks / Pending)`인 section이다
   - canonical entry shape:
@@ -90,7 +100,12 @@ tool-specific 차이를 제외한 `/wf-*` semantic contract, artifact ownership,
 ### state.json
 
 원칙:
-- `state.json`은 workflow 위치, latest result pointer, approval/block 상태, counters를 담는 canonical machine-readable state다
+- `state.json`은 workflow 위치, latest result pointer, approval/block 상태, counters를 담는 machine-readable mirror다
+- PR5(`PlanCurrentState` parser/writer 도입) 이후 initialized task에서 canonical state는 `plan.md`의 `Current State` section이며, `state.json`은 helper/runtime을 위한 derived mirror다
+- pre-PR5 task처럼 `plan.md`에 `Current State` section이 없으면 shared reader는 기존 `state.json`만 사용한다
+- `state.json`과 `plan.md` Current State가 충돌하면 shared reader는 `plan.md` 값을 우선해 in-memory state를 반환한다. `state.json` mirror 파일 갱신은 명시 reconcile helper가 수행한다
+- 운영 중 mirror drift를 발견하면 `reconcile_state_from_plan` helper를 한 번 실행해 `plan.md` Current State에서 `state.json` mirror를 재생성한다
+- PR5 task에서 `plan.md` Current State write가 성공하고 `state.json` mirror write만 실패한 경우는 canonical update 성공으로 취급한다. pre-PR5 task처럼 `plan.md`가 없으면 `state.json` write 실패가 canonical update 실패다
 - `schema_version`은 required top-level integer field이며 현재 값은 `2`이다
 - `workflow_mode`의 허용 값은 `guided | generic`이다
 - `current_phase`의 허용 값은 `pre-planning | plan | step | implementation | verification | review`다
@@ -369,6 +384,8 @@ guard 해석 원칙:
 - `/wf-verify`는 항상 최신 `plan.md`의 `Verification` contract를 canonical input으로 사용한다
 
 **state.json 초기값**
+- `/wf-start`는 같은 값을 `plan.md`의 `Current State` section에도 기록한다
+- `/wf-start`는 `plan.md` scaffold 생성 후 initial state writer를 호출해야 한다. 이 순서가 깨지면 initial `Current State` mirror가 생성되지 않는다
 - `schema_version=2`
 - `session_state=in_progress`
 - `workflow_mode=<guided | generic>`
@@ -1500,7 +1517,7 @@ shared core의 first executable spine은 다음 4개 skill이다.
 - `shared snapshot helper`
   - 책임: task-local baseline capture 요청/opaque baseline ref handoff
 - `shared state writer`
-  - 책임: canonical `state.json` write, immediate/deferred transition 반영, counters 반영
+  - 책임: `plan.md` Current State와 `state.json` mirror write, immediate/deferred transition 반영, counters 반영
 - `shared log writer`
   - 책임: checkpoint/verification/review/apply recovery 계열 log append
 - `shared apply sink`

@@ -157,9 +157,9 @@ def _set_state_field(task_root: Path, field: str, value: object) -> None:
     state_path = task_root / "state.json"
     if not state_path.exists():
         return
-    payload = json.loads(state_path.read_text(encoding="utf-8"))
-    payload[field] = value
-    state_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    state = read_state(state_path)
+    setattr(state, field, value)
+    write_state(state_path, state)
 
 
 def _next(task_root: Path, ref: str, phase: CurrentPhase, hint: JudgementCode = JudgementCode.HOLD):
@@ -818,11 +818,11 @@ def test_next_review_transition_preserves_existing_stop_and_block_refs(tmp_path:
     task_root.mkdir()
     ref = _write_review(task_root, "DONE")
     _write_state(task_root, CurrentPhase.REVIEW, latest_review_ref=ref)
-    state_payload = json.loads((task_root / "state.json").read_text(encoding="utf-8"))
-    state_payload["stop_condition_ref"] = "logs/stop-condition.json"
-    state_payload["blocked_transition"] = "previous"
-    state_payload["blocked_reason_ref"] = "logs/previous-block.json"
-    (task_root / "state.json").write_text(json.dumps(state_payload, indent=2), encoding="utf-8")
+    state = read_state(task_root / "state.json")
+    state.stop_condition_ref = "logs/stop-condition.json"
+    state.blocked_transition = "previous"
+    state.blocked_reason_ref = "logs/previous-block.json"
+    write_state(task_root / "state.json", state)
 
     result = _next_review(task_root, ref)
 
@@ -868,9 +868,9 @@ def test_next_review_blocks_non_latest_review_ref(tmp_path: Path) -> None:
     stale_ref = "logs/review/stale.json"
     (task_root / stale_ref).write_text((task_root / latest_ref).read_text(encoding="utf-8"), encoding="utf-8")
     _write_state(task_root, CurrentPhase.REVIEW)
-    state_payload = json.loads((task_root / "state.json").read_text(encoding="utf-8"))
-    state_payload["latest_review_ref"] = latest_ref
-    (task_root / "state.json").write_text(json.dumps(state_payload, indent=2), encoding="utf-8")
+    state = read_state(task_root / "state.json")
+    state.latest_review_ref = latest_ref
+    write_state(task_root / "state.json", state)
 
     result = _next_review(task_root, stale_ref)
 

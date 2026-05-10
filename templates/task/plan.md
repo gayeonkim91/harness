@@ -10,8 +10,9 @@ Plan 작성 메모
 - 새 이슈는 `리스크 / 보류 사항(Risks / Pending)`에 기록하고, 필요하면 후속 step 또는 별도 plan으로 분리한다.
 - `(go)`는 현재 시작할 step 하나에만 붙인다.
 - `현재 상태 (Current State)`의 `session_state`는 `draft`, `in_progress`, `awaiting_approval`, `paused`, `done`만 사용한다.
+- `current_step`과 `latest_checkpoint`는 사람이 읽는 요약 전용이다. machine state ref는 runtime이 `current_step_ref`, `latest_checkpoint_ref`로 기록한다.
 - `latest_checkpoint`는 `<phase> / <판정 코드> — <한줄 근거>` 형식으로 기록한다.
-- `last_updated`는 YYYY-MM-dd HH:mm:ss 형식으로 기록한다.
+- `last_updated`는 YYYY-MM-dd HH:mm:ss KST 형식으로 기록한다.
 -->
 
 # Plan: <task-name>

@@ -7,6 +7,12 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
+from harness.shared.artifacts.plan_artifact import (
+    apply_plan_current_state_to_harness_state,
+    plan_current_state_from_harness_state,
+    read_plan_current_state,
+    write_plan_current_state,
+)
 from harness.shared.contracts.results import ApplyResult, ApplyStatus
 from harness.shared.contracts.state import (
     CurrentPhase,
@@ -59,6 +65,38 @@ def _state_to_payload(state: HarnessState) -> dict[str, Any]:
     return payload
 
 
+def _write_state_json(path: Path, state: HarnessState) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(_state_to_payload(state), indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
+
+
+def _read_state_json_payload(path: Path) -> dict[str, Any]:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _reconcile_state_from_plan(state_path: Path, state: HarnessState) -> HarnessState:
+    plan_path = state_path.with_name("plan.md")
+    if not plan_path.exists():
+        return state
+
+    plan_current = read_plan_current_state(plan_path)
+    if plan_current is None:
+        return state
+
+    reconciled = apply_plan_current_state_to_harness_state(state, plan_current)
+    return reconciled
+
+
+def _write_plan_mirror_for_state(state_path: Path, state: HarnessState) -> None:
+    plan_path = state_path.with_name("plan.md")
+    if plan_path.exists():
+        write_plan_current_state(plan_path, plan_current_state_from_harness_state(state))
+
+
+def _plan_mirror_exists(state_path: Path) -> bool:
+    return state_path.with_name("plan.md").exists()
+
+
 def _load_enum(enum_cls: type, value: str | None) -> Any:
     if value is None:
         return None
@@ -99,12 +137,13 @@ def _payload_to_state(payload: dict[str, Any]) -> HarnessState:
 
 
 def read_state(state_path: str | Path) -> HarnessState:
-    """Read the canonical workflow state.
+    """Read workflow state, reconciling plan.md Current State when present.
 
     Auto-migrates or repairs state.json on first read so callers never see
     legacy tokens like ``"active"`` or ``"verification_entry"``. The migration
     is idempotent and writes a backup before rewriting (see
-    :mod:`harness.shared.core.state_migration`).
+    :mod:`harness.shared.core.state_migration`). For PR5+ tasks, plan.md wins
+    over state.json for fields present in Current State.
     """
     path = _normalize_path(state_path)
     migration = migrate_state_file(path)
@@ -112,14 +151,29 @@ def read_state(state_path: str | Path) -> HarnessState:
         payload = json.loads(path.read_text(encoding="utf-8"))
     else:
         payload = migration.payload
-    return _payload_to_state(payload)
+    return _reconcile_state_from_plan(path, _payload_to_state(payload))
+
+
+def reconcile_state_from_plan(state_path: str | Path) -> HarnessState:
+    """Reconcile state.json mirror from plan.md Current State explicitly."""
+    path = _normalize_path(state_path)
+    state = read_state(path)
+    if _state_to_payload(state) != _read_state_json_payload(path):
+        _write_state_json(path, state)
+    return state
 
 
 def write_state(state_path: str | Path, state: HarnessState) -> None:
-    """Write the canonical workflow state."""
+    """Write state.json and mirror it into plan.md Current State when present."""
     path = _normalize_path(state_path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(_state_to_payload(state), indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
+    has_plan_mirror = _plan_mirror_exists(path)
+    _write_plan_mirror_for_state(path, state)
+    try:
+        _write_state_json(path, state)
+    except OSError:
+        if has_plan_mirror:
+            return
+        raise
 
 
 def write_initial_state(state_path: str | Path, state: HarnessState) -> None:
@@ -130,7 +184,9 @@ def write_initial_state(state_path: str | Path, state: HarnessState) -> None:
 def apply_immediate_transition(state_path: str | Path, transition: DeferredStateTransition) -> None:
     """Apply an immediate transition without /wf-apply mediation."""
     state = read_state(state_path)
-    approvals_granted = transition.approvals_granted if transition.approvals_granted is not None else state.approvals_granted
+    approvals_granted = (
+        transition.approvals_granted if transition.approvals_granted is not None else state.approvals_granted
+    )
     updated = HarnessState(
         schema_version=state.schema_version,
         session_state=transition.session_state,
@@ -170,7 +226,9 @@ def apply_deferred_transition_with_apply_result(
         return
 
     state = read_state(state_path)
-    approvals_granted = transition.approvals_granted if transition.approvals_granted is not None else state.approvals_granted
+    approvals_granted = (
+        transition.approvals_granted if transition.approvals_granted is not None else state.approvals_granted
+    )
     current_step_ref = _resolve_current_step_ref(
         state.current_step_ref,
         transition.current_phase,

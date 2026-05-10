@@ -6,7 +6,7 @@ from io import StringIO
 from pathlib import Path
 
 from harness.runtime_cli import main
-from harness.shared.artifacts.plan_artifact import scaffold_plan
+from harness.shared.artifacts.plan_artifact import read_plan_current_state, scaffold_plan
 from harness.shared.artifacts.state_artifact import read_state
 from harness.shared.runtime.start_runtime import StartRuntimeInput, execute_start_runtime
 
@@ -64,9 +64,14 @@ def test_execute_start_runtime_blocks_reinitialization(tmp_path: Path) -> None:
     assert second["reason_code"] == "START_TASK_ALREADY_INITIALIZED"
     assert second["created_artifacts"] == []
     state = read_state(task_root / "state.json")
+    current = read_plan_current_state(task_root / "plan.md")
     assert state.workspace_baseline_ref == "logs/workspace-baseline.json"
     assert not Path(state.workspace_baseline_ref).is_absolute()
     assert (task_root / state.workspace_baseline_ref).exists()
+    assert current is not None
+    assert current.session_state == state.session_state
+    assert current.current_phase == state.current_phase
+    assert current.workspace_baseline_ref == "logs/workspace-baseline.json"
 
 
 def test_execute_start_runtime_initializes_generic_verification_contract(tmp_path: Path) -> None:

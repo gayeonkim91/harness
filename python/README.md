@@ -39,6 +39,8 @@
 - `wf-start-mode-resolver` helper는 explicit profile ref 또는 `contracts/repo_profile.md` convention으로 guided mode를 resolve하고, 둘 다 없으면 generic mode를 반환한다
 - guided `/wf-start`는 guard가 load한 repo profile을 `GuardDecision.repo_profile`으로 runtime validation에 넘긴다. 이 handoff는 process-global cache가 아니라 단일 invocation scoped cache다
 - `/wf-start`는 `logs/workspace-baseline.json`을 만들고 그 경로를 `state.json.workspace_baseline_ref`에 기록한다
+- PR5(`PlanCurrentState` parser/writer 도입)부터 `/wf-start`와 shared state writer는 같은 상태를 `plan.md`의 `Current State`에도 기록하며, `state.json`과 충돌하면 `plan.md`를 우선한다. `read_state()`는 in-memory reconcile만 수행하고, mirror 파일 갱신은 명시 reconcile helper가 담당한다
+- `plan.md`와 `state.json` mirror가 drift되면 `reconcile_state_from_plan()`을 한 번 실행해 mirror를 재생성한다
 - baseline artifact는 최소 workspace root, capture 시각, git `HEAD` 가능 여부, `git status --porcelain=v1`, working tree diff, staged diff 결과를 담는다
 - `diff_helper`는 baseline artifact 기준으로 task-scoped raw diff와 `sha256:<digest>` fingerprint를 계산한다
 - task 시작 전에 이미 있던 tracked/staged dirty diff는 baseline artifact에 기록되며, 이후 task-scoped diff에서 제외된다

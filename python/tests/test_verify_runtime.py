@@ -235,10 +235,10 @@ def test_persist_verify_runtime_clears_previous_state_update_block_on_success(tm
     workspace, task_root, baseline_ref = _workspace_with_baseline(tmp_path)
     _write_plan(task_root)
     _write_state(task_root, baseline_ref)
-    state_payload = json.loads((task_root / "state.json").read_text(encoding="utf-8"))
-    state_payload["blocked_transition"] = "verify_state_update"
-    state_payload["blocked_reason_ref"] = "logs/verification/orphan.json"
-    (task_root / "state.json").write_text(json.dumps(state_payload, indent=2), encoding="utf-8")
+    state = read_state(task_root / "state.json")
+    state.blocked_transition = "verify_state_update"
+    state.blocked_reason_ref = "logs/verification/orphan.json"
+    write_state(task_root / "state.json", state)
     (workspace / "new-file.txt").write_text("new\n", encoding="utf-8")
 
     result = persist_verify_runtime(
