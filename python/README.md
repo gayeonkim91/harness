@@ -40,6 +40,7 @@
 - `wf-start-mode-resolver` helper는 explicit profile ref 또는 `contracts/repo_profile.md` convention으로 guided mode를 resolve하고, 둘 다 없으면 generic mode를 반환한다
 - guided `/wf-start`는 guard가 load한 repo profile을 `GuardDecision.repo_profile`으로 runtime validation에 넘긴다. 이 handoff는 process-global cache가 아니라 단일 invocation scoped cache다
 - `/wf-start`는 `logs/workspace-baseline.json`을 만들고 그 경로를 `state.json.workspace_baseline_ref`에 기록한다
+- PR7부터 신규 runbook task는 `steps.md`를 만들지 않고 `plan.md` 안의 `Steps` / `Working Notes` section으로 step을 진행한다. 기존 `steps.md` task는 legacy step source로 읽기 호환한다
 - `wf-docs-only-runtime`은 runbook `plan.md`/`steps.md`를 만들지 않고, 별도 docs-only `state.json`(`workflow_kind=docs_only`)과 `logs/docs-only/*.json` event log만 기록한다
 - PR5(`PlanCurrentState` parser/writer 도입)부터 `/wf-start`와 shared state writer는 같은 상태를 `plan.md`의 `Current State`에도 기록하며, `state.json`과 충돌하면 `plan.md`를 우선한다. `read_state()`는 in-memory reconcile만 수행하고, mirror 파일 갱신은 명시 reconcile helper가 담당한다
 - `plan.md`와 `state.json` mirror가 drift되면 `reconcile_state_from_plan()`을 한 번 실행해 mirror를 재생성한다

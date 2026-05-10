@@ -40,6 +40,10 @@ PLAN_TEMPLATE = """# Plan: {task_name}
 ## Risks / Pending
 
 ## Contract Notes
+
+## Steps
+
+## Working Notes
 """
 
 CURRENT_STATE_SECTION_TITLE = "Current State"
@@ -48,6 +52,10 @@ CURRENT_STATE_SECTION_ALIASES = {
     "현재 상태 (current state)",
 }
 _NONE_TEXT_VALUES = {"", "null", "none", "n/a", "해당 없음"}
+SECTION_HEADER_ALIASES = {
+    "Contract Notes": {"contract notes", "계약 메모 (contract notes)", "계약 메모(contract notes)"},
+    "Working Notes": {"working notes", "작업 노트 (working notes)", "작업 노트(working notes)"},
+}
 
 
 class PlanCurrentStateError(ValueError):
@@ -503,27 +511,42 @@ def write_plan_current_state(plan_path: str | Path, current: PlanCurrentState) -
     write_plan(path, _replace_current_state_section(content, rendered, section))
 
 
-def _append_to_section(content: str, section_header: str, entry: str) -> str:
-    marker = f"## {section_header}\n"
-    if marker not in content:
+def _find_section_line_range(content: str, section_header: str) -> tuple[int, int] | None:
+    aliases = SECTION_HEADER_ALIASES.get(section_header, {_normalize_section_title(section_header)})
+    lines = content.splitlines()
+    in_fence = False
+    start_index = None
+    for index, line in enumerate(lines):
+        if line.startswith("```"):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+        if start_index is None:
+            if line.startswith("## ") and _normalize_section_title(line[3:]) in aliases:
+                start_index = index
+            continue
+        if line.startswith("## "):
+            return start_index, index
+    if start_index is None:
+        return None
+    return start_index, len(lines)
+
+
+def append_to_section(content: str, section_header: str, entry: str) -> str:
+    """Append an entry to a level-two section, honoring known section aliases."""
+
+    section_range = _find_section_line_range(content, section_header)
+    if section_range is None:
         suffix = "\n" if not content.endswith("\n") else ""
-        return f"{content}{suffix}{marker}\n{entry}\n"
+        return f"{content}{suffix}## {section_header}\n\n{entry}\n"
 
-    start = content.index(marker) + len(marker)
-    remainder = content[start:]
-    next_header_rel = remainder.find("\n## ")
-    if next_header_rel == -1:
-        section_body = remainder
-        tail = ""
-    else:
-        section_body = remainder[:next_header_rel]
-        tail = remainder[next_header_rel:]
-
-    updated_body = section_body
-    if updated_body and not updated_body.endswith("\n"):
-        updated_body += "\n"
-    updated_body += f"{entry}\n"
-    return f"{content[:start]}{updated_body}{tail}"
+    _, end_index = section_range
+    lines = content.splitlines()
+    if entry in lines[section_range[0] + 1 : end_index]:
+        return content
+    updated = lines[:end_index] + [entry] + lines[end_index:]
+    return "\n".join(updated) + "\n"
 
 
 def scaffold_plan(task_root: str | Path, task_name: str) -> Path:
@@ -708,11 +731,11 @@ def append_contract_note(plan_path: str | Path, note_text: str, basis_refs: list
     entry = f"- [contract-note] {note_text}"
     if basis_refs:
         entry += f" [basis_refs={', '.join(basis_refs)}]"
-    write_plan(path, _append_to_section(read_plan(path), "Contract Notes", entry))
+    write_plan(path, append_to_section(read_plan(path), "Contract Notes", entry))
 
 
 def append_rewrite_required(plan_path: str | Path, rewrite_reason_code: str, basis_ref: str) -> None:
     """Append a rewrite-required entry to plan.md."""
     path = _normalize_path(plan_path)
     entry = f"- [rewrite-required] {rewrite_reason_code} [basis_ref={basis_ref}]"
-    write_plan(path, _append_to_section(read_plan(path), "Contract Notes", entry))
+    write_plan(path, append_to_section(read_plan(path), "Contract Notes", entry))

@@ -14,7 +14,6 @@ from harness.shared.artifacts.state_artifact import write_initial_state
 from harness.shared.core.guard_executor import GuardInput, run_guard
 from harness.shared.core.phase_spec_loader import PhaseSpecLoadError, resolve_workspace_root
 from harness.shared.core.repo_profile_loader import RepoProfileLoadError, load_repo_profile
-from harness.shared.artifacts.steps_artifact import scaffold_steps
 from harness.shared.core.snapshot_helper import capture_workspace_baseline
 from harness.shared.core.start_mode_resolver import StartModeResolverInput, resolve_start_mode
 from harness.shared.core.task_paths import get_task_paths
@@ -222,7 +221,6 @@ def execute_start_runtime(input_data: StartRuntimeInput) -> dict[str, object]:
             gate_source=gate_source,
         )
         plan_path = scaffold_plan_with_verification(task_paths.task_root, input_data.task_name, verification_contract)
-        steps_path = scaffold_steps(task_paths.task_root)
         task_paths.logs_dir.mkdir(parents=True, exist_ok=True)
         baseline_ref = capture_workspace_baseline(task_paths.task_root, workspace_root=workspace_root)
     except OSError:
@@ -271,7 +269,6 @@ def execute_start_runtime(input_data: StartRuntimeInput) -> dict[str, object]:
         "phase_doc_ref": input_data.phase_doc_ref,
         "created_artifacts": [
             str(plan_path),
-            str(steps_path),
             str(task_paths.state_path),
             str(task_paths.logs_dir),
         ],

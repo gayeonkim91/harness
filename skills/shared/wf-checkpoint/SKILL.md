@@ -9,6 +9,7 @@
 - phase 문서 checkpoint 항목을 평가한다
 - 필요 시 repo profile supplement를 함께 본다
 - `judgement_code`, `note_signals`, `current_step_ref_snapshot`을 포함한 구조화된 결과를 만든다
+- `step` / `implementation`에서는 `plan.md` inline `Steps`의 단일 `(go)` step을 현재 step으로 본다. legacy `steps.md`는 inline section이 없을 때만 호환 입력이다
 
 ## Python Helper Boundary
 - Python helper는 checkpoint log/state sink만 담당한다

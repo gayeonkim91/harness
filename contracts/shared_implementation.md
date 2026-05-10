@@ -17,7 +17,7 @@ tool-specific 차이를 제외한 `/wf-*` semantic contract, artifact ownership,
 
 범위:
 - 최종적으로 `/wf-*` 공용 skill semantic contract
-- artifact(`plan.md`, `steps.md`, `state.json`, `logs/`)의 공용 읽기/쓰기 contract
+- artifact(`plan.md`, legacy `steps.md`, `state.json`, `logs/`)의 공용 읽기/쓰기 contract
 - shared failure/block/resume 처리
 - shared review/guard executor boundary
 
@@ -33,7 +33,8 @@ tool-specific 차이를 제외한 `/wf-*` semantic contract, artifact ownership,
 - 하위 문서의 예시/표현이 이 문서와 충돌하면 이 문서를 정본으로 본다
 - `/wf-*` skill 본체는 single-source shared skill set으로 유지한다
 - `state.json`, `logs/` 쓰기는 shared writer가 담당한다
-- `plan.md`, `steps.md`는 semantic markdown artifact이므로 각 skill이 직접 수정한다
+- `plan.md`는 semantic markdown artifact이므로 각 skill이 직접 수정한다
+- `steps.md`는 PR7 이후 신규 task에서 만들지 않는다. 기존 task의 legacy step source로만 읽기 호환한다
 - review packet은 shared packet builder가 조립한다
 - review log 기록과 `latest_review_ref` 갱신은 shared review sink가 담당한다
 - reviewer execution만 adapter 책임이다
@@ -64,37 +65,38 @@ tool-specific 차이를 제외한 `/wf-*` semantic contract, artifact ownership,
     - pending entry: `- [pending] <pending_text> [basis_refs=<ref1>, <ref2>, ...]`
   - legacy plain bullet은 read-only compatibility를 위해 허용하고, packet builder는 이를 opaque unresolved item으로 읽을 수 있다
   - 이 section은 contract-level unresolved risk / pending만 담는다
-  - active working risk / pending의 canonical 위치는 `steps.md` 또는 `logs/`이며, plan section이 이를 대체하지 않는다
+  - active working risk / pending의 canonical 위치는 `plan.md`의 `Working Notes` 또는 `logs/`이며, contract-level `Risks / Pending` section이 이를 대체하지 않는다
   - section이 없으면 packet builder는 empty로 간주할 수 있다
 - `Contract Notes` section render shape:
+  - section aliases: `Contract Notes`, `계약 메모 (Contract Notes)`
   - note entry: `- [contract-note] <note_text> [basis_refs=<ref1>, <ref2>, ...]`
   - rewrite-required entry: `- [rewrite-required] <rewrite_reason_code> [basis_ref=<ref>]`
   - section이 없으면 `/wf-apply`가 생성할 수 있다
   - `Contract Notes`는 checklist parse 대상이 아니다
 
-### steps.md
+### inline Steps in plan.md
 
-- `steps.md`는 실행 가능한 step 목록과 working note를 담는 semantic artifact다
-- 이 문서는 `steps.md`의 parse/write contract와 markdown render shape 같은 shared 구현 상세를 고정한다
-- canonical structure:
-  - `Steps` top-level section은 execution step의 canonical 위치다
-  - `Working Notes` top-level section은 working note / rework-required marker의 canonical 위치다
+- PR7 이후 신규 runbook task의 실행 가능한 step 목록과 working note는 `plan.md` 안의 top-level `Steps` / `Working Notes` section에 둔다
+- 한국어 template의 `진행 단계 (Steps)`는 `Steps` section alias로 파싱한다
+- 신규 task는 `steps.md`를 만들지 않는다
+- 기존 `steps.md` task는 `plan.md`에 inline `Steps` section이 없거나 inline section이 성공적으로 parse됐지만 비어 있거나 template placeholder sentinel(`<!-- harness:steps-placeholder -->`)만 담고 있을 때 legacy step source로 읽을 수 있다
+- `plan.md` inline `Steps` section parse가 실패하면 legacy `steps.md`로 fallback하지 않고 해당 inline plan을 canonical 오류로 차단한다
 - `Steps` section parse contract:
-  - canonical execution step은 `Steps` section 안 top-level checklist item만 포함한다
-  - 각 execution step은 machine-readable `step_ref`를 명시적으로 가져야 한다
-  - `step_ref` 표기 형식은 `[step_ref=<id>]`이며 문서 내에서 유일해야 한다
+  - execution step은 `Steps` section 안 top-level checklist item만 포함한다
+  - HTML comment block은 execution step으로 파싱하지 않는다
   - `pending`은 unchecked(`- [ ]`) step이다
   - `done`은 checked(`- [x]`) step이다
   - `(go)`는 current step marker이며 `pending | done` 판정 기준과 분리된다
-  - canonical execution step 기준 `(go)` marker는 항상 `0개 또는 1개`만 허용한다
-- steps writer contract:
-  - `steps.md`를 생성/재작성하는 skill은 위 canonical structure를 보존해야 한다
-  - `step_ref`를 임의 재발급하지 않는다. step identity가 유지되는 수정이면 기존 `step_ref`를 유지한다
-  - 새 execution step을 추가할 때만 새 `step_ref`를 발급한다
-  - `Working Notes` 등 다른 section은 execution step parse 대상이 아니다
+  - step 본문 중간의 literal `(go)` 문자열은 marker로 보지 않는다
+  - marker는 no-`step_ref` inline step에서는 line 끝의 ` (go)`, legacy `[step_ref=...]` step에서는 `[step_ref=...]` 바로 앞의 ` (go)` sentinel만 의미한다
+  - canonical execution step 기준 `(go)` marker는 최종적으로 `0개 또는 1개`만 허용한다. `step` / `implementation` checkpoint 진입 시에는 정확히 1개가 필요하다
+  - `[step_ref=...]`는 legacy read-only compatibility field다. 신규 step writer는 `step_ref`를 발급하거나 재발급하지 않는다
+  - no-`step_ref` inline step의 `current_step_ref_snapshot.step_ref`는 Python helper가 base document order에서 만든 ephemeral locator이며, persistent identity로 취급하지 않는다
 - `Working Notes` section render shape:
-  - note entry: `- [step_ref=<id>] <note_text> [basis_refs=<ref1>, <ref2>, ...]`
-  - rewrite-required entry: `- [step_ref=<id>] rewrite-required:<rewrite_reason_code> [basis_ref=<ref>]`
+  - section aliases: `Working Notes`, `작업 노트 (Working Notes)`
+  - note entry: `- [step] <step_text>: <note_text> [basis_refs=<ref1>, <ref2>, ...]`
+  - rewrite-required entry: `- [step] <step_text>: rewrite-required:<rewrite_reason_code> [basis_ref=<ref>]`
+  - legacy `steps.md` fallback task에서는 기존 entry shape `- [step_ref=<id>] ...`를 유지해 중복 note를 만들지 않는다
   - `Working Notes` section이 없으면 `/wf-apply`가 생성할 수 있다
 
 ### state.json
@@ -117,8 +119,9 @@ tool-specific 차이를 제외한 `/wf-*` semantic contract, artifact ownership,
 - `workspace_baseline_ref`, `latest_checkpoint_ref`, `latest_verification_ref`, `latest_review_ref` 같은 task-local artifact ref는 task root 기준 상대 경로로 저장한다
 - baseline artifact는 최소 `captured_at`, `workspace_root`, VCS 종류, `head_commit` 가능 여부, `git status --porcelain=v1` 결과를 담아야 한다
 - baseline capture helper는 explicit `workspace_root`를 요구하며, 누락 시 current working directory로 fallback하지 않는다
-- `current_step_ref`는 execution-step-bearing phase에서만 canonical 의미를 가진다
-- `current_phase=step | implementation`이면 `current_step_ref`를 사용할 수 있다
+- PR7 이후 current step의 canonical source는 `plan.md` inline `Steps` section의 단일 `(go)` marker다
+- `current_step_ref`는 legacy mirror/read-compat field다. 신규 no-`step_ref` task에서는 Python helper가 marker의 document-order 위치에서 ephemeral locator를 쓸 수 있지만, 사람이나 skill은 이를 stable step identity로 취급하지 않는다
+- `current_phase=step | implementation`이면 `current_step_ref`를 사용할 수 있지만 없어도 단일 `(go)` marker가 있으면 checkpoint guard를 통과할 수 있다
 - `current_phase=pre-planning | plan | verification | review`이면 `current_step_ref=null`이어야 한다
 - `pending_approval_for`의 공식 값은 `pre_plan_to_plan | plan_to_implementation | closure`이다
 - `approvals_granted`는 승인점 통과 이력을 담는 정수 배열이며 `1=pre_plan_to_plan`, `2=plan_to_implementation`, `3=closure`를 의미한다
@@ -272,9 +275,9 @@ tool-specific 차이를 제외한 `/wf-*` semantic contract, artifact ownership,
 - `workflow_kind != runbook`이거나 `workflow_kind_resolved=false`이면 `reason_code=START_NOT_RUNBOOK`으로 차단한다
 - active repo profile이 있는 workspace에서 resolved `workflow_mode=generic`이 들어오면 `reason_code=START_WORKFLOW_MODE_CONFLICT`로 차단한다
 - `task_root`가 없으면 `/wf-start`가 생성할 수 있어야 한다
-- target `task_root`에 canonical workflow artifact(`plan.md`, `steps.md`, `state.json`, `logs/`)가 모두 있으면 `reason_code=START_TASK_ALREADY_INITIALIZED`로 차단한다
+- target `task_root`에 canonical workflow artifact(`plan.md`, `state.json`, `logs/`)가 모두 있으면 `reason_code=START_TASK_ALREADY_INITIALIZED`로 차단한다. legacy `steps.md` 존재 여부는 already-initialized 판단에 필요하지 않다
 - target `task_root`에 canonical workflow artifact의 strict subset만 있으면 `reason_code=START_TASK_INIT_PARTIAL`로 차단한다
-- init guard에서 `logs/`는 directory 존재 여부만 본다. 빈 디렉토리도 "존재"로 간주하며, `plan.md`, `steps.md`, `state.json`은 있는데 `logs/`만 없으면 partial initialization이다
+- init guard에서 `logs/`는 directory 존재 여부만 본다. 빈 디렉토리도 "존재"로 간주하며, `plan.md`, `state.json`은 있는데 `logs/`만 없으면 partial initialization이다. `steps.md`만 있어도 legacy partial initialization으로 본다
 - `task_root`를 만들 수 없거나 scaffold artifact를 쓸 수 없으면 `reason_code=START_TASK_ROOT_UNWRITABLE`로 차단한다
 - `initial_phase`가 `pre-planning | plan`이 아니면 `reason_code=START_INITIAL_PHASE_INVALID`로 차단한다
 - guided mode인데 도입 유형을 판정할 수 없으면 `reason_code=START_PROJECT_CONTEXT_UNRESOLVED`로 차단할 수 있다
@@ -373,7 +376,6 @@ guard 해석 원칙:
 
 **생성/보장 대상**
 - `plan.md` scaffold
-- `steps.md` scaffold
 - `state.json`
 - `logs/` 디렉토리
 
@@ -413,13 +415,13 @@ guard 해석 원칙:
 
 **artifact scaffold 원칙**
 - `plan.md`는 contract section scaffold만 만든다. `/wf-start`가 plan 본문 의미를 채우지 않는다
-- `plan.md` scaffold는 downstream reader가 기대하는 top-level section(`Goal`, `Scope`, `DoD`, `Constraints`, `Risks / Pending`, `Contract Notes`)을 포함할 수 있다
-- `steps.md`는 최소 `Steps`, `Working Notes` top-level section을 가진 scaffold를 만든다
+- `plan.md` scaffold는 downstream reader가 기대하는 top-level section(`Goal`, `Scope`, `DoD`, `Constraints`, `Risks / Pending`, `Contract Notes`, `Steps`, `Working Notes`)을 포함할 수 있다
+- `/wf-start`는 `steps.md`를 만들지 않는다
 - `/wf-start`는 첫 `(go)` step이나 `current_step_ref`를 만들지 않는다
 
 **쓰기 책임**
 - `task_root` 디렉토리가 없으면 `/wf-start`가 생성한다
-- `plan.md`, `steps.md` scaffold 생성은 `/wf-start`가 담당한다
+- `plan.md` scaffold 생성은 `/wf-start`가 담당한다
 - task-local workspace baseline capture는 `/wf-start`가 요청하고 shared snapshot/state writer가 `logs/workspace-baseline.json` ref를 `workspace_baseline_ref`에 기록한다
 - baseline capture는 `/wf-start`에서 정규화된 explicit `workspace_root`를 사용하며, helper 내부에서 `cwd`를 추론하지 않는다
 - 초기 `state.json` 기록은 shared state writer가 담당한다
@@ -617,7 +619,7 @@ guard 해석 원칙:
 - 따라서 `/wf-checkpoint`는 모든 대상 phase에서 `plan.md` 존재를 전제로 한다
 - pre-planning의 `plan.md`는 완성본이 아니라 scaffold/draft 상태일 수 있다
 - `plan.md`가 없으면 guard가 `PLAN_ARTIFACT_MISSING`으로 차단한다
-- `step`, `implementation`에서 `current_step_ref`가 없으면 guard가 `CHECKPOINT_CURRENT_STEP_REF_MISSING`으로 차단한다
+- `step`, `implementation`에서는 `plan.md` inline `Steps` 또는 legacy `steps.md`에 정확히 1개의 `(go)` marker가 있어야 한다. `current_step_ref`가 있어도 marker 검증을 대체할 수 없다. marker가 없거나 2개 이상이거나 Steps section이 invalid이면 `CHECKPOINT_CURRENT_STEP_REF_MISSING`으로 차단한다
 - `state.json.current_phase`가 `/wf-checkpoint` 대상이 아니면 `reason_code=CHECKPOINT_PHASE_UNSUPPORTED`로 차단한다
 - phase 문서의 checkpoint spec을 읽을 수 없으면 `reason_code=CHECKPOINT_PHASE_SPEC_UNAVAILABLE`로 차단한다
 - guard에 차단되면 `/wf-checkpoint`는 checkpoint result artifact를 만들지 않는다
@@ -632,14 +634,14 @@ guard 해석 원칙:
 - `plan.md`
 
 조건부:
-- `step`, `implementation`이면 `steps.md`와 `current_step_ref` 주변 문맥
+- `step`, `implementation`이면 `plan.md` inline `Steps`의 단일 `(go)` step 주변 문맥. `plan.md`에 inline `Steps` section이 없는 legacy task에서는 `steps.md`를 read-only compatibility source로 읽을 수 있다
 - guided mode에서 active repo onboarding profile
 - active repo onboarding profile이 phase-specific checkpoint supplement를 정의하면 그 supplement가 요구하는 추가 repo artifact/doc
 - caller가 넘긴 `candidate_basis_refs`
 - 필요한 workspace evidence
 
 읽기 원칙:
-- 기본 우선순위는 `state -> phase checkpoint spec -> plan/steps -> evidence`다
+- 기본 우선순위는 `state -> phase checkpoint spec -> plan inline steps -> legacy steps.md -> evidence`다
 - phase별 허용 판정 집합의 canonical source는 각 phase 문서의 `Checkpoint > 판정` 섹션이다
 - phase 문서가 fenced YAML `phase_spec` block을 제공하면 shared loader는 그 block의 `checkpoint_items`, `allowed_judgements`를 우선 canonical source로 사용한다. fenced spec block이 없을 때만 markdown `Checkpoint` section을 fallback parser로 읽는다
 - phase spec block은 fence info가 `yaml phase-spec`이어야 하며, top-level `phase_spec:` mapping을 가져야 한다
@@ -690,7 +692,7 @@ guard 해석 원칙:
 - `note_target_hint=steps`는 `current_step_ref_snapshot != null`인 checkpoint output에서만 허용한다
 - note의 의미 분류는 `/wf-checkpoint`가 담당한다
 - artifact action 생성은 `/wf-next`가 담당한다
-- 실제 `plan.md` 또는 `steps.md` 반영은 `/wf-apply`가 담당한다
+- 실제 `plan.md` 반영은 `/wf-apply`가 담당한다. legacy `steps.md`는 plan inline section이 없는 기존 task의 compatibility source다
 
 **출력**
 - `checkpoint_ref`
@@ -715,7 +717,7 @@ guard 해석 원칙:
 - top-level `basis_refs`는 최종 `judgement_code`와 `summary`를 지지하는 근거 ref 집합이다
 - 즉 `check_items[*].basis_refs`는 항목별 상세 근거이고, top-level `basis_refs`는 최종 판정 요약 근거다
 - `current_step_ref_snapshot`은 최소 `step_ref`, `step_text`, `go_marker_present`를 가진다
-- `step_ref`는 canonical execution step id다
+- `step_ref`는 legacy `[step_ref=...]`가 있으면 그 값을 담고, no-ref inline step이면 Python helper가 marker의 document-order 위치에서 만든 ephemeral locator를 담는다. 이 값은 persistent identity가 아니다. checkpoint persistence는 no-ref inline step의 prompt-supplied `step_ref`를 canonical marker snapshot으로 normalize할 수 있지만, legacy stable `step_ref`는 marker snapshot과 일치해야 한다
 - `step_text`는 snapshot 시점의 execution step text이며 `(go)` marker sentinel은 포함하지 않는다
 - `go_marker_present`는 snapshot 시점에 해당 step에 `(go)` marker가 있었는지를 나타낸다
 - `primary_cause_code`는 remediation/hold 판단의 primary cause를 나타내는 stable token이다
@@ -764,12 +766,12 @@ null 규칙:
 - checkpoint result writer는 `checkpoint_ref`가 포함된 최종 payload를 1-pass write로 남겨야 하며, placeholder result를 먼저 쓰고 같은 파일을 재작성하지 않는다
 - `state.json.latest_checkpoint_ref` 갱신은 shared writer가 담당한다
 - `/wf-checkpoint`는 `session_state`, `current_phase`, `pending_approval_for`, `review_outcome`, `closure_authorized`를 직접 수정하지 않는다
-- `/wf-checkpoint`는 `plan.md`, `steps.md`를 직접 수정하지 않는다
+- `/wf-checkpoint`는 `plan.md` 또는 legacy `steps.md`를 직접 수정하지 않는다
 
 **후속 handoff**
 - `/wf-next`는 `latest_checkpoint_ref`가 가리키는 checkpoint result를 읽는다
 - `/wf-next`는 `judgement_code`, `stop_condition_code`, `note_signals`, `reason_fingerprint`를 해석해 `required_artifact_actions`와 state transition을 만든다
-- `/wf-apply`는 그 structured action을 적용해 `plan.md` 또는 `steps.md`를 수정한다
+- `/wf-apply`는 그 structured action을 적용해 `plan.md` inline step sections를 수정한다
 
 **하지 않는 것**
 - next phase 결정
@@ -777,7 +779,7 @@ null 규칙:
 - approval 처리
 - 다음 `(go)` step 선정
 - `required_artifact_actions` 직접 생성
-- `plan.md`/`steps.md` 직접 수정
+- `plan.md` 또는 legacy `steps.md` 직접 수정
 - `verification`/`review` result 생성
 
 ### /wf-verify
@@ -841,7 +843,7 @@ null 규칙:
   - `summary`
   - `basis_refs`
 - repo profile의 자동 정리 단계가 workspace를 변경하면, `/wf-verify`는 그 변경을 허용한다
-- 이 변경은 `plan.md`/`steps.md`/`state.json` artifact write가 아니라 verification execution의 일부로 본다
+- 이 변경은 `plan.md`/legacy `steps.md`/`state.json` artifact write가 아니라 verification execution의 일부로 본다
 - 이후 gate와 review는 cleanup 적용 후의 workspace 상태를 기준으로 판단한다
 
 **평가 규칙**
@@ -868,7 +870,7 @@ null 규칙:
 - 이후 성공적인 `/wf-verify` 재실행은 이전 `blocked_transition=verify_state_update`, `blocked_reason_ref`를 clear한다
 - 재개 시 메인 workflow/orchestrator는 unresolved verify recovery record와 orphan verification log를 사용자에게 노출하고, 일반 `/wf-next(source=verify)`로 진행하지 않는다. 수습은 orphan log를 폐기하고 `/wf-verify`를 재실행하거나, 운영자가 orphan ref를 state pointer로 채택한 뒤 recovery record를 resolved 처리하는 방식 중 하나로 명시적으로 수행한다
 - `/wf-verify`는 `session_state`, `current_phase`, `pending_approval_for`, `review_outcome`, `closure_authorized`를 직접 수정하지 않는다
-- `/wf-verify`는 `plan.md`, `steps.md`, `state.json`, `logs/`를 직접 수정하지 않는다
+- `/wf-verify`는 `plan.md`, legacy `steps.md`, `state.json`, `logs/`를 직접 수정하지 않는다
   - 단, repo profile 자동 정리 단계의 workspace 변경은 verification execution으로 허용된다
 - verify blocked output은 `reason_code`와 함께 operator-facing `message_summary`를 포함한다
 
@@ -905,7 +907,7 @@ null 규칙:
 - review input packet 조립
 - review execution
 - `required_artifact_actions` 생성
-- `plan.md`/`steps.md` 직접 수정
+- `plan.md` 또는 legacy `steps.md` 직접 수정
 
 ### /wf-review
 
@@ -949,12 +951,12 @@ null 규칙:
 조건부:
 - `latest_checkpoint_ref`
 - caller가 넘긴 `candidate_basis_refs`
-- `steps.md`의 `Working Notes` section
+- `plan.md` inline `Working Notes` section 또는 legacy `steps.md`의 `Working Notes` section
 - `latest_verification_ref`가 가리키는 verification item의 `basis_refs`
 - review packet builder가 diff 설명에 필요하다고 판단한 changed file excerpt
 
 기본 제외:
-- `steps.md` 전체
+- step source 전체
 - `state.json` 전체 dump
 - 이전 review result 전문
 - 메인 workflow의 self-check 상세나 변호성 설명
@@ -965,7 +967,7 @@ null 규칙:
   - `contract_summary`: `plan.md`의 `Goal`, `Scope`, `DoD`, `Constraints`
   - `raw_diff`: `workspace_baseline_ref` 기준의 현재 task-scoped factual diff
   - `verification_summary`: `latest_verification_ref`의 판정, 핵심 item 결과, stop condition, note/issue 요약
-  - `unresolved_risks_summary`: `plan.md`의 contract-level `Risks / Pending`, `steps.md`의 `Working Notes`에서 아직 carry-forward가 필요한 unresolved item, verification 결과에서 남겨야 할 risk/note를 합성한 요약
+  - `unresolved_risks_summary`: `plan.md`의 contract-level `Risks / Pending`, inline `Working Notes`에서 아직 carry-forward가 필요한 unresolved item, verification 결과에서 남겨야 할 risk/note를 합성한 요약
 - packet builder는 자유 서술형 변호나 “왜 이렇게 구현했는가” 설명을 추가하지 않는다
 - file excerpt나 basis ref를 포함하더라도 factual snippet만 허용한다
 - 별도 packet snapshot file은 만들지 않는다
@@ -1004,7 +1006,7 @@ null 규칙:
 - 이후 성공적인 `/wf-review` 재실행은 이전 `blocked_transition=review_state_update`, `blocked_reason_ref`를 clear한다
 - 재개 시 메인 workflow/orchestrator는 unresolved review recovery record와 orphan review log를 사용자에게 노출하고, 일반 `/wf-next(source=review)`로 진행하지 않는다. 수습은 orphan log를 폐기하고 `/wf-review`를 재실행하거나, 운영자가 orphan ref를 state pointer로 채택한 뒤 recovery record를 resolved 처리하는 방식 중 하나로 명시적으로 수행한다
 - `/wf-review`는 `session_state`, `current_phase`, `pending_approval_for`, `review_outcome`, `closure_authorized`를 직접 수정하지 않는다
-- `/wf-review`는 `plan.md`, `steps.md`, `state.json`, `logs/`를 직접 수정하지 않는다
+- `/wf-review`는 `plan.md`, legacy `steps.md`, `state.json`, `logs/`를 직접 수정하지 않는다
 - reviewer output validation 실패 시 shared state writer는 blocked state mutation을 반영한다
 - review blocked output은 `reason_code`와 함께 operator-facing `message_summary`를 포함한다
 
@@ -1045,7 +1047,7 @@ null 규칙:
 - semantic routing 재판단
 - verification 재실행
 - `required_artifact_actions` 생성
-- `plan.md`/`steps.md` 직접 수정
+- `plan.md` 또는 legacy `steps.md` 직접 수정
 
 ### /wf-next
 
@@ -1102,24 +1104,24 @@ null 규칙:
 조건부:
 - `resolved_result_ref != null`이면 해당 최신 결과 artifact
 - invalid approval context에서는 결과 artifact를 읽지 않고 `state.json`만 기준으로 판단한다
-- steps-targeted action 생성이나 current step snapshot 복원이 필요하면 `steps.md`
+- steps-targeted action 생성이나 current step snapshot 복원이 필요하면 `plan.md` inline `Steps` 또는 legacy `steps.md`
 
 필요 시:
 - judgement rules
 - stop-conditions
 - 현재 phase 완료 기준 문서
-- `steps.md`의 현재 `current_step_ref` 주변 문맥
+- step source의 현재 `(go)` 주변 문맥
 
 **current step snapshot 복원 규칙**
 - `/wf-next`는 steps-targeted action을 생성할 때마다 `params.current_step_ref_snapshot`을 채워야 한다
 - `source=checkpoint`이고 checkpoint result에 non-null `current_step_ref_snapshot`이 있으면 그것을 그대로 사용한다
-- 그 외 source(`verify | review | approval`)이거나 checkpoint result에 usable snapshot이 없으면 `/wf-next`는 `state.json.current_step_ref`와 `steps.md`의 canonical parse 결과로 `resolved_current_step_ref_snapshot`을 재구성한다
-- 재구성은 `state.json.current_step_ref`가 가리키는 execution step을 `steps.md`에서 정확히 1개 resolve하는 방식이어야 한다
+- 그 외 source(`verify | review | approval`)이거나 checkpoint result에 usable snapshot이 없으면 `/wf-next`는 `state.json.current_step_ref`와 step source의 canonical parse 결과로 `resolved_current_step_ref_snapshot`을 재구성한다
+- 재구성은 `state.json.current_step_ref`가 가리키는 execution step을 step source에서 정확히 1개 resolve하는 방식이어야 한다
 - 재구성된 snapshot shape은 checkpoint output의 `current_step_ref_snapshot`과 동일한 contract를 따른다
 - 재구성된 snapshot은 최소 `step_ref`, `step_text`, `go_marker_present`를 채워야 한다
-- `go_marker_present`는 `/wf-next`가 읽은 base-state `steps.md`에서 해당 step의 `(go)` marker 존재 여부와 일치해야 한다
+- `go_marker_present`는 `/wf-next`가 읽은 base-state step source에서 해당 step의 `(go)` marker 존재 여부와 일치해야 한다
 - steps-targeted action이 필요하지 않은 경로에서는 snapshot 복원을 수행하지 않아도 된다
-- steps-targeted action이 필요한데 `state.json.current_step_ref=null`이거나 `steps.md`에서 대상 step을 찾지 못하거나 2개 이상 매칭되면 invalid routing context로 간주한다
+- steps-targeted action이 필요한데 current step snapshot을 step source에서 resolve할 수 없으면 invalid routing context로 간주한다
 - 이 경우 정상 라우팅을 진행하지 않고 `next_phase=current_phase`, `next_session_state=paused`, `pending_approval_for`는 기존 값을 유지, `required_artifact_actions=[]`, `reason_code=NEXT_CURRENT_STEP_CONTEXT_UNRESOLVABLE`, `routing_basis_ref=state.json`으로 처리한다
 
 **라우팅 로직**
@@ -1198,7 +1200,7 @@ null 규칙:
   - `pending_approval_for=plan_to_implementation` -> `next_phase=implementation`, `next_session_state=in_progress`, `pending_approval_for=null`, `approvals_granted += 2`
   - `pending_approval_for=closure` -> `next_phase=review`, `next_session_state=done`, `pending_approval_for=null`, `closure_authorized=true`, `approvals_granted += 3`
 
-- `source=verify | review`에서 `step` phase로 재개하는 경로는 메인 에이전트가 `steps.md` semantic rewrite를 직접 수행하는 경로다
+- `source=verify | review`에서 `step` phase로 재개하는 경로는 메인 에이전트가 `plan.md` inline `Steps` semantic rewrite를 직접 수행하는 경로다
 - 따라서 이 경로들에서는 `/wf-next`가 synthetic `current_step_ref_snapshot`을 만들거나 `steps.rewrite_required` action을 합성하지 않는다
 
 **하지 않는 것**
@@ -1206,12 +1208,12 @@ null 규칙:
 - verification/review 실행
 - review input packet 조립
 - review log 저장
-- `plan.md`/`steps.md` 직접 수정
-- `steps.md`를 직접 읽고 `(go)` marker를 붙이거나 제거하는 실행
+- `plan.md` 직접 수정
+- step source를 직접 읽고 `(go)` marker를 붙이거나 제거하는 실행
 
 `/wf-next`는 다음 `(go)` step의 selection policy를 결정할 수는 있지만, 그 결정을 markdown 수정으로 집행하지는 않는다.
 
-다음 `(go)` step의 실제 marker 반영과 `steps.md` 갱신은 `/wf-apply` 책임이다.
+다음 `(go)` step의 실제 marker 반영과 `plan.md` inline step 갱신은 `/wf-apply` 책임이다.
 
 **출력**
 최소:
@@ -1321,7 +1323,7 @@ null 규칙:
 - `required_artifact_actions=[]`인 경로에서 `next_phase=pre-planning | plan | verification | review`이면 `current_step_ref=null`로 clear한다
 - `next_session_state=done`이면 `current_step_ref=null`로 clear한다
 - 다만 clear 전의 현재 step 문맥은 `required_artifact_actions[*].params.current_step_ref_snapshot`으로 `/wf-apply`에 넘긴다
-- 새 step 선정이나 `steps.md` 수정은 직접 하지 않고 `required_artifact_actions`로 `/wf-apply`에 넘긴다
+- 새 step 선정이나 step source 수정은 직접 하지 않고 `required_artifact_actions`로 `/wf-apply`에 넘긴다
 
 ### /wf-apply
 
@@ -1331,10 +1333,10 @@ null 규칙:
 - `deferred_state_transition`이 있으면 artifact apply 성공 후 shared state writer로 state를 반영한다
 
 **목적**
-- `/wf-apply`는 `/wf-next`가 만든 `required_artifact_actions`를 받아 `plan.md`, `steps.md`에 적용하는 shared applier다
+- `/wf-apply`는 `/wf-next`가 만든 `required_artifact_actions`를 받아 `plan.md` inline step sections에 적용하는 shared applier다
 - semantic routing은 하지 않는다
 - 허용 action만 적용한다
-- `plan.md`, `steps.md`만 직접 수정한다
+- `plan.md`만 직접 수정한다. legacy `steps.md` task는 `plan.md`에 inline `Steps` section이 없을 때 compatibility path로 처리할 수 있다
 - `state.json`은 직접 쓰지 않는다
 - `logs/` 직접 기록은 `APPLY_COMMIT_PARTIAL` recovery record를 shared apply sink로 남기는 경우만 허용한다
 - `/wf-next`가 결정한 selection policy를 실제 `(go)` marker 변경으로 반영하는 것은 `/wf-apply` 책임이다
@@ -1355,24 +1357,24 @@ null 규칙:
 **읽는 artifact / 참조**
 - `required_artifact_actions`
 - `plan.md` (`target=plan` action이 하나라도 있으면 필수)
-- `steps.md` (`target=steps` action이 하나라도 있으면 필수)
+- `plan.md` inline `Steps` / `Working Notes` (`target=steps` action이 하나라도 있으면 필수). legacy task에서 inline section이 없으면 `steps.md`를 fallback source로 읽을 수 있다
 - `state.json` (`deferred_state_transition`이 있으면 shared state writer handoff에서 필수)
 
-**steps.md parse contract**
+**inline steps parse contract**
 - `/wf-next`와 `/wf-apply`는 같은 shared steps parser가 해석한 canonical structure를 소비한다
 - canonical execution step은 `Steps` section 안 top-level checklist item만 포함한다
 - 들여쓴 nested checklist item은 note/example로 취급하며 execution step으로 파싱하지 않는다
 - leading whitespace가 있는 checklist item은 top-level execution step이 아니라 nested checklist로 간주한다
 - fenced code block 안의 `## Steps` 또는 checklist item은 canonical execution step으로 파싱하지 않는다
-- `Steps` section heading은 exact top-level `## Steps`만 canonical이다
-- `(go)` marker는 execution step line의 `[step_ref=...]` 바로 앞에 있는 ` (go)` sentinel만 의미한다
+- `Steps` section heading은 top-level `## Steps` 또는 `## 진행 단계 (Steps)` alias다
+- `(go)` marker는 no-ref inline step에서는 line 끝의 ` (go)`, legacy `[step_ref=...]` step에서는 `[step_ref=...]` 바로 앞의 ` (go)` sentinel만 의미한다
 - step 본문 중간의 literal `(go)` 문자열은 marker로 보지 않는다
 - `next_pending_after_current`, `first_pending`는 그 canonical parse 결과의 문서 순서를 따른다
 
 **snapshot validation base state**
-- `/wf-apply`의 `current_step_ref_snapshot` matching 기준은 action 적용 전 원본 `steps.md`의 base state다
+- `/wf-apply`의 `current_step_ref_snapshot` matching 기준은 action 적용 전 원본 step source(`plan.md` inline steps 또는 legacy `steps.md`)의 base state다
 - snapshot은 base-state execution step의 `step_ref`, `step_text`, `go_marker_present`와 모두 일치해야 한다
-- 같은 batch 안의 earlier action이 `steps.md`를 바꿔도 snapshot matching 자체는 base state를 기준으로 판단한다
+- 같은 batch 안의 earlier action이 step source를 바꿔도 snapshot matching 자체는 base state를 기준으로 판단한다
 - 반면 action sequence 유효성, `(go)` cardinality, postcondition 검사는 각 action 적용 후의 in-memory state를 기준으로 판단한다
 - 따라서 `steps.clear_current_step -> steps.select_next_go_step` sequence에서는 두 action이 같은 base snapshot을 공유할 수 있다
 
@@ -1381,14 +1383,14 @@ null 규칙:
 - 필요한 target artifact가 없으면 `reason_code=APPLY_TARGET_ARTIFACT_MISSING`으로 차단한다
 - `deferred_state_transition`이 있는데 `state.json`이 없으면 `reason_code=STATE_ARTIFACT_MISSING`으로 차단한다
 - `deferred_state_transition`이 있는데 `state.json`이 runbook state가 아니거나 읽을 수 없는 shape이면 `reason_code=STATE_ARTIFACT_INVALID`로 차단하며, 파일을 마이그레이션하거나 재작성하지 않는다
-- `STATE_ARTIFACT_MISSING` / `STATE_ARTIFACT_INVALID` precondition은 plan/steps artifact write 전에 평가한다
-- `steps.md`의 canonical execution step에 missing 또는 duplicate `step_ref`가 있으면 `reason_code=APPLY_STEP_REF_INVALID`로 차단한다
-- `steps.md`에 `(go)` marker가 2개 이상이면 `reason_code=APPLY_GO_CARDINALITY_INVALID`로 차단한다
+- `STATE_ARTIFACT_MISSING` / `STATE_ARTIFACT_INVALID` precondition은 artifact write 전에 평가한다
+- legacy `[step_ref=...]` 값이 중복되면 `reason_code=APPLY_STEP_REF_INVALID`로 차단한다. no-ref inline steps는 `step_ref` 누락으로 차단하지 않는다
+- step source에 `(go)` marker가 2개 이상이면 `reason_code=APPLY_GO_CARDINALITY_INVALID`로 차단한다
 - `steps.record_working_note`, `steps.clear_current_step`, `steps.rewrite_required`는 `current_step_ref_snapshot`이 필수다
 - `steps.mark_current_step_done`는 `current_step_ref_snapshot`이 필수다
 - `steps.select_next_go_step`는 모든 `selection_basis.mode`에서 `current_step_ref_snapshot`이 필수다
 - 위 필수 snapshot이 없으면 `reason_code=APPLY_CURRENT_STEP_REF_SNAPSHOT_REQUIRED`로 차단한다
-- steps-targeted action이 가진 `current_step_ref_snapshot`을 base-state `steps.md`에 대응시킬 수 없거나 snapshot의 `step_text` / `go_marker_present`가 base state와 다르면 `reason_code=APPLY_CURRENT_STEP_REF_SNAPSHOT_MISMATCH`로 차단한다
+- steps-targeted action이 가진 `current_step_ref_snapshot`을 base-state step source에 대응시킬 수 없거나 snapshot의 `step_text` / `go_marker_present`가 base state와 다르면 `reason_code=APPLY_CURRENT_STEP_REF_SNAPSHOT_MISMATCH`로 차단한다
 - `selection_basis.mode=explicit_step_ref`인데 대상 step을 찾지 못하면 `reason_code=APPLY_SELECTION_TARGET_NOT_FOUND`로 차단한다
 - in-memory apply 중 기존 `(go)` marker가 남아 있는 상태에서 `steps.select_next_go_step`가 들어오면 `reason_code=APPLY_GO_SEQUENCE_INVALID`로 차단한다
 
@@ -1399,7 +1401,7 @@ null 규칙:
 - postcondition 검사와 `current_step_ref_update_mode` 계산은 in-memory render 직후, file write 이전에 끝내야 한다
 - 모든 action 검증과 in-memory 결과 생성이 끝난 뒤에만 파일을 쓴다
 - file write는 temp file + rename으로 각 artifact별 atomic write를 사용한다
-- `plan.md`와 `steps.md` 사이의 cross-file atomic commit은 보장하지 않는다
+- `plan.md`와 legacy `steps.md` 사이의 cross-file atomic commit은 보장하지 않는다. 신규 inline task의 plan + steps-targeted actions는 같은 `plan.md` write로 commit된다
 - 일부 artifact만 commit된 뒤 후속 write가 실패하면 `apply_status=BLOCKED`, `reason_code=APPLY_COMMIT_PARTIAL`로 반환한다
 - `APPLY_COMMIT_PARTIAL`이면 `updated_artifacts`에는 실제로 commit된 artifact만 기록한다
 - `APPLY_COMMIT_PARTIAL`이면 `applied_actions`에는 실제로 commit된 target artifact에 대응하는 action만 기록한다
@@ -1425,9 +1427,9 @@ null 규칙:
 **note / marker dedupe 규칙**
 - 중복 note 또는 marker는 failure가 아니라 `noop`으로 처리한다
 - `plan.record_contract_note` dedupe key는 `normalized(note_text) + sorted(note_basis_refs)`다
-- `steps.record_working_note` dedupe key는 `step_ref + normalized(note_text) + sorted(note_basis_refs)`다
+- `steps.record_working_note` dedupe key는 `step_text + normalized(note_text) + sorted(note_basis_refs)`다
 - `plan.rewrite_required` dedupe key는 `rewrite_reason_code + basis_ref`다
-- `steps.rewrite_required` dedupe key는 `step_ref + rewrite_reason_code + basis_ref`다
+- `steps.rewrite_required` dedupe key는 `step_text + rewrite_reason_code + basis_ref`다
 
 **action별 적용 규칙**
 - `steps.mark_current_step_done`
@@ -1441,7 +1443,7 @@ null 규칙:
   - `plan.md`의 `Contract Notes` section에 rewrite-required entry를 추가한다
   - 이 action은 plan 본문을 semantic하게 재작성하지 않는다
 - `steps.record_working_note`
-  - `steps.md`의 `Working Notes` section에 현재 `step_ref` 기준 note entry를 추가한다
+  - `plan.md`의 `Working Notes` section에 현재 step text 기준 note entry를 추가한다. legacy task에서는 fallback step source의 `Working Notes` section에 기존 `[step_ref=...]` entry shape로 추가한다
   - `Working Notes` section이 없으면 `/wf-apply`가 생성한다
 - `steps.clear_current_step`
   - snapshot이 가리키는 현재 `(go)` step에서 `(go)` marker를 제거한다
@@ -1458,22 +1460,22 @@ null 규칙:
   - terminal clear path에서는 `/wf-next`가 `steps.select_next_go_step`를 만들지 않고 `steps.clear_current_step`만 넘겨야 한다
   - 대상 step이 이미 유일한 `(go)` step이면 `noop`으로 처리한다
 - `steps.rewrite_required`
-  - `steps.md`의 `Working Notes` section에 현재 `step_ref` 기준 rewrite-required entry를 추가한다
+  - `plan.md`의 `Working Notes` section에 현재 step text 기준 rewrite-required entry를 추가한다. legacy task에서는 fallback step source의 `Working Notes` section에 기존 `[step_ref=...]` entry shape로 추가한다
   - 이 action은 step 본문을 semantic하게 재작성하지 않는다
 
 **rewrite 이후 후속 흐름**
 - `plan.rewrite_required` 또는 `steps.rewrite_required`는 semantic rewrite를 대체하지 않는다
 - marker apply 이후의 semantic rewrite executor는 별도 `/wf-*` skill이 아니라 메인 에이전트다
 - `/wf-next`가 `next_phase=plan`으로 라우팅하고 `plan.rewrite_required`를 생성했으면, 메인 에이전트는 `plan.md` 본문을 직접 재작성한 뒤 `plan` phase의 `/wf-checkpoint`를 다시 수행한다
-- `/wf-next`가 `next_phase=step`으로 라우팅하고 `steps.rewrite_required`를 생성했으면, 메인 에이전트는 `steps.md` 본문을 직접 재작성한 뒤 `step` phase의 `/wf-checkpoint`를 다시 수행한다
-- `/wf-next`가 `next_phase=step`으로 라우팅하되 action 없이 들어온 경우(`source=verify | review`의 step 재개), 메인 에이전트는 기존 `steps.md` 전체를 다시 읽고 필요한 execution step 재구성을 직접 수행한 뒤 `step` phase의 `/wf-checkpoint`를 다시 수행한다
+- `/wf-next`가 `next_phase=step`으로 라우팅하고 `steps.rewrite_required`를 생성했으면, 메인 에이전트는 `plan.md` inline `Steps` 본문을 직접 재작성한 뒤 `step` phase의 `/wf-checkpoint`를 다시 수행한다
+- `/wf-next`가 `next_phase=step`으로 라우팅하되 action 없이 들어온 경우(`source=verify | review`의 step 재개), 메인 에이전트는 `plan.md` inline `Steps` 전체를 다시 읽고 필요한 execution step 재구성을 직접 수행한 뒤 `step` phase의 `/wf-checkpoint`를 다시 수행한다
 - `REWORK`로 `next_phase=implementation`인 경우에는 같은 current step을 기준으로 메인 에이전트가 구현 변경을 계속 수행한 뒤 `implementation` phase의 `/wf-checkpoint`를 다시 수행한다
 - 즉 `/wf-next -> /wf-apply`는 rewrite 필요 상태와 control-plane 위치만 정렬하고, 실제 내용 재작성과 재진입은 메인 에이전트가 담당한다
 
 **post-apply invariant**
 - canonical execution step 기준 `(go)` marker는 최종적으로 `0개 또는 1개`만 허용한다
 - post-apply 결과 `(go)` marker가 2개 이상이면 `reason_code=APPLY_GO_POSTCONDITION_INVALID`로 차단한다
-- `/wf-apply`는 각 action의 local signal이 아니라 최종 rendered `steps.md`의 `(go)` marker postcondition으로 `current_step_ref_update_mode`와 `resolved_current_step_ref`를 계산한다
+- `/wf-apply`는 각 action의 local signal이 아니라 최종 rendered step source의 `(go)` marker postcondition으로 `current_step_ref_update_mode`와 `resolved_current_step_ref`를 계산한다
 
 **출력**
 - `apply_status` (`APPLIED | NOOP | BLOCKED`)
@@ -1498,7 +1500,7 @@ null 규칙:
 - `APPLY_COMMIT_PARTIAL`이면 `current_step_ref_update_mode=unchanged`, `resolved_current_step_ref=null`이다
 
 **쓰기 책임 / handoff**
-- `/wf-apply`는 `plan.md`, `steps.md`만 직접 수정한다
+- `/wf-apply`는 `plan.md`만 직접 수정한다. legacy `steps.md`는 inline section이 없는 기존 task에서만 compatibility fallback으로 수정될 수 있다
 - `/wf-apply`는 `state.json`을 직접 수정하지 않는다
 - `logs/` 직접 기록은 `APPLY_COMMIT_PARTIAL` recovery record를 shared apply sink로 남기는 경우만 허용한다
 - `required_artifact_actions`가 있는 경로에서는 shared state writer가 `apply_status != BLOCKED`일 때만 `/wf-next.deferred_state_transition`과 `/wf-apply` 결과를 합쳐 한 번에 후속 반영한다
@@ -1546,7 +1548,7 @@ null 규칙:
 - `APPLY_COMMIT_PARTIAL`은 일반 blocked/resume 규칙으로 처리하지 않는다
 - 재개 시작 시 메인 workflow는 일반 state 기반 재개 전에 unresolved partial recovery record 존재 여부를 먼저 확인한다
 - unresolved partial recovery record가 있으면 `state.json`만 source of truth로 사용하지 않는다
-- 이 경우 메인 workflow는 partial recovery record의 `updated_artifacts`, attempted action list, `routing_basis_ref`와 실제 `plan.md`/`steps.md` 내용을 함께 읽어 artifact/state divergence를 수습한다
+- 이 경우 메인 workflow는 partial recovery record의 `updated_artifacts`, attempted action list, `routing_basis_ref`와 실제 `plan.md`/legacy `steps.md` 내용을 함께 읽어 artifact/state divergence를 수습한다
 - 수습 방법은 자동 rollback이 아니라 현재 disk 상태를 기준으로 한 정합성 복원이다
 - 수습이 끝나면 해당 task의 현재 intended phase에서 `/wf-checkpoint`를 다시 수행해 state와 artifact를 재동기화한다
 - partial recovery record가 unresolved인 동안에는 일반 `/wf-next -> /wf-apply` 루프를 바로 재개하지 않는다
@@ -1591,7 +1593,7 @@ shared core의 first executable spine은 다음 4개 skill이다.
 - `policy/rule loader`
   - 책임: judgement rules, stop-conditions, 현재 phase 완료 기준 문서 load
 - `artifact readers`
-  - 책임: `plan.md`, `steps.md`, `state.json`, latest result ref parse
+  - 책임: `plan.md`, legacy `steps.md`, `state.json`, latest result ref parse
 - `shared snapshot helper`
   - 책임: task-local baseline capture 요청/opaque baseline ref handoff
 - `shared state writer`
@@ -1604,8 +1606,8 @@ shared core의 first executable spine은 다음 4개 skill이다.
   - 책임: `workspace_baseline_ref` 기준 task-scoped diff와 stable fingerprint 계산
 - `plan writer`
   - 책임: `plan.md` scaffold 생성, contract note append, rewrite marker apply
-- `steps writer`
-  - 책임: `steps.md` scaffold 생성, step done/clear/select, working note append, rewrite marker apply
+- `inline steps writer`
+  - 책임: `plan.md` inline `Steps`/`Working Notes` step done/clear/select, working note append, rewrite marker apply. legacy `steps.md`는 compatibility fallback
 
 원칙:
 - foundation helper는 semantic judgement를 새로 만들지 않는다
@@ -1627,7 +1629,7 @@ shared core의 first executable spine은 다음 4개 skill이다.
   - guided mode면 profile schema로 `task_classification`, `minimum_read_set`, `default_initial_phase_hint` 계산
   - runtime validation은 guard가 handoff한 loaded profile을 우선 사용하고, handoff가 없을 때만 fallback load를 허용한다
 - `start.scaffold_writer`
-  - `plan.md`, `steps.md`, `logs/` 생성
+  - `plan.md`, `logs/` 생성
 - `start.state_initializer`
   - baseline capture 요청 후 initial `state.json` 기록
 
@@ -1635,7 +1637,7 @@ shared core의 first executable spine은 다음 4개 skill이다.
 - `shared guard executor`
 - `repo profile loader`
 - `plan writer`
-- `steps writer`
+- `inline steps writer`
 - `shared snapshot helper`
 - `shared state writer`
 
@@ -1714,16 +1716,16 @@ shared core의 first executable spine은 다음 4개 skill이다.
 - `shared log writer`
 - `shared apply sink`
 - `plan writer`
-- `steps writer`
+- `inline steps writer`
 
 산출물:
-- updated `plan.md`/`steps.md`
+- updated `plan.md` and legacy `steps.md` only when compatibility fallback is used
 - apply result contract
 
 ### 구현 순서
 
 권장 구현 순서:
-1. `shared guard executor`, `repo profile loader`, `phase spec loader`, `policy/rule loader`, `artifact readers`, `shared snapshot helper`, `shared state writer`, `shared log writer`, `shared apply sink`, `shared diff helper`, `plan writer`, `steps writer`
+1. `shared guard executor`, `repo profile loader`, `phase spec loader`, `policy/rule loader`, `artifact readers`, `shared snapshot helper`, `shared state writer`, `shared log writer`, `shared apply sink`, `shared diff helper`, `plan writer`, `inline steps writer`
 2. `/wf-start`
 3. `/wf-checkpoint`
 4. `/wf-next`

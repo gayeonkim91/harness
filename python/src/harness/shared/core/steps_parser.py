@@ -1,4 +1,4 @@
-"""Canonical parser for steps.md execution steps."""
+"""Canonical parser for inline execution steps."""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ class ParsedStep:
     text: str
     step_ref: str
     go_marker_present: bool
+    legacy_step_ref: str | None = None
 
 
 @dataclass(slots=True)
@@ -21,18 +22,36 @@ class StepParseResult:
     reason_code: str | None = None
 
 
-STEP_PATTERN = re.compile(r"^- \[(?P<mark>[ xX])\]\s+(?P<body>.*?)\s+\[step_ref=(?P<ref>[^\]]+)\]\s*$")
+STEP_PATTERN = re.compile(
+    r"^- \[(?P<mark>[ xX])\]\s+(?P<body>.*?)(?:\s+\[step_ref=(?P<ref>[^\]]+)\])?\s*$"
+)
 GO_MARKER = " (go)"
+STEPS_SECTION_ALIASES = {
+    "steps",
+    "진행 단계 (steps)",
+    "진행 단계(steps)",
+}
+
+
+def _normalize_section_title(title: str) -> str:
+    return " ".join(title.strip().lower().split())
 
 
 def parse_steps(content: str) -> StepParseResult:
-    """Parse canonical top-level execution steps from the Steps section."""
+    """Parse top-level execution steps from the inline Steps section.
+
+    PR7 makes ``(go)`` marker location the current-step identity. Legacy
+    ``[step_ref=...]`` markers remain readable, but new inline steps do not
+    need to carry a machine id. For no-ref steps, ``step_ref`` is an ephemeral
+    document-order locator used only inside one routing/apply round trip.
+    """
 
     steps: list[ParsedStep] = []
     refs: set[str] = set()
     go_count = 0
     in_section = False
     in_fence = False
+    in_html_comment = False
     lines = content.splitlines()
 
     for index, line in enumerate(lines):
@@ -42,12 +61,21 @@ def parse_steps(content: str) -> StepParseResult:
         if in_fence:
             continue
 
-        if line == "## Steps":
+        if line.startswith("## ") and _normalize_section_title(line[3:]) in STEPS_SECTION_ALIASES:
             in_section = True
             continue
         if in_section and line.startswith("## "):
             break
         if not in_section or not line.strip():
+            continue
+        stripped = line.strip()
+        if in_html_comment:
+            if "-->" in stripped:
+                in_html_comment = False
+            continue
+        if stripped.startswith("<!--"):
+            if "-->" not in stripped:
+                in_html_comment = True
             continue
         if line[:1].isspace():
             continue
@@ -55,10 +83,12 @@ def parse_steps(content: str) -> StepParseResult:
         match = STEP_PATTERN.match(line)
         if match is None:
             return StepParseResult(reason_code="APPLY_STEP_REF_INVALID")
-        step_ref = match.group("ref")
-        if step_ref in refs:
+        legacy_step_ref = match.group("ref")
+        step_ref = legacy_step_ref or f"step:{len(steps) + 1}"
+        if legacy_step_ref is not None and legacy_step_ref in refs:
             return StepParseResult(reason_code="APPLY_STEP_REF_INVALID")
-        refs.add(step_ref)
+        if legacy_step_ref is not None:
+            refs.add(legacy_step_ref)
 
         body = match.group("body")
         go_present = body.endswith(GO_MARKER)
@@ -71,6 +101,7 @@ def parse_steps(content: str) -> StepParseResult:
                 text=step_text.strip(),
                 step_ref=step_ref,
                 go_marker_present=go_present,
+                legacy_step_ref=legacy_step_ref,
             )
         )
 

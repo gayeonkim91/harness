@@ -10,7 +10,8 @@ Plan 작성 메모
 - 새 이슈는 `리스크 / 보류 사항(Risks / Pending)`에 기록하고, 필요하면 후속 step 또는 별도 plan으로 분리한다.
 - `(go)`는 현재 시작할 step 하나에만 붙인다.
 - `현재 상태 (Current State)`의 `session_state`는 `draft`, `in_progress`, `awaiting_approval`, `paused`, `done`만 사용한다.
-- `current_step`과 `latest_checkpoint`는 사람이 읽는 요약 전용이다. machine state ref는 runtime이 `current_step_ref`, `latest_checkpoint_ref`로 기록한다.
+- `current_step`과 `latest_checkpoint`는 사람이 읽는 요약 전용이다. `current_step_ref`는 legacy/runtime mirror이며 step 식별 정본은 `(go)` marker 위치다.
+- 신규 step에는 `[step_ref=...]`를 쓰지 않는다.
 - `latest_checkpoint`는 `<phase> / <판정 코드> — <한줄 근거>` 형식으로 기록한다.
 - `last_updated`는 YYYY-MM-dd HH:mm:ss KST 형식으로 기록한다.
 -->
@@ -102,8 +103,13 @@ Verification 작성 메모
 - <추가 설계가 필요한 부분>
 - <후속 plan으로 넘길 항목>
 
+## 계약 메모 (Contract Notes)
+
 ## 진행 단계 (Steps)
-<!-- step은 실제 작업으로 적는다. -->
+<!-- harness:steps-placeholder -->
+<!-- 실제 step을 작성할 때 위 placeholder marker를 삭제한다. -->
 - [ ] Step 1: <첫 번째 독립 작업 단위>
 - [ ] Step 2: <다음 독립 작업 단위>
 - [ ] ...
+
+## 작업 노트 (Working Notes)

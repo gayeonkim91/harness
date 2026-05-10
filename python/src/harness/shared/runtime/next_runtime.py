@@ -22,6 +22,7 @@ from harness.shared.contracts.results import (
 )
 from harness.shared.contracts.state import CurrentPhase, DeferredStateTransition, HarnessCounters, HarnessState, ReviewOutcome, SessionState
 from harness.shared.core.state_migration import StateMigrationError
+from harness.shared.core.step_source import resolve_step_artifact
 from harness.shared.core.steps_parser import parse_steps
 from harness.shared.core.task_paths import get_task_paths
 
@@ -899,7 +900,7 @@ def _route_implementation(
         snapshot = checkpoint.current_step_ref_snapshot
         if snapshot is None:
             return _blocked_result(state, "NEXT_CURRENT_STEP_CONTEXT_UNRESOLVABLE", "state.json", state.pending_approval_for)
-        remaining = _has_pending_step_after_current(task_root / "steps.md", snapshot.step_ref)
+        remaining = _has_pending_step_after_current(task_root, snapshot)
         if remaining is None:
             return _blocked_result(state, "NEXT_CURRENT_STEP_CONTEXT_UNRESOLVABLE", "state.json", state.pending_approval_for)
         actions = [
@@ -971,17 +972,27 @@ def _step_action(
     )
 
 
-def _has_pending_step_after_current(steps_path: Path, current_step_ref: str) -> bool | None:
+def _has_pending_step_after_current(task_root: Path, snapshot: CurrentStepRefSnapshot) -> bool | None:
     try:
-        content = steps_path.read_text(encoding="utf-8")
+        artifact = resolve_step_artifact(task_root)
     except OSError:
         return None
+    if artifact is None:
+        return None
+    content = artifact.content
     parsed = parse_steps(content)
     if parsed.reason_code is not None:
         return None
+    current_step = next((step for step in parsed.steps if step.step_ref == snapshot.step_ref), None)
+    if current_step is None:
+        return None
+    if current_step.text != snapshot.step_text.strip():
+        return None
+    if current_step.go_marker_present != snapshot.go_marker_present:
+        return None
     seen_current = False
     for step in parsed.steps:
-        if step.step_ref == current_step_ref:
+        if step.step_ref == snapshot.step_ref:
             seen_current = True
             continue
         if seen_current and step.mark == " ":

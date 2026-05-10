@@ -21,6 +21,8 @@ def test_scaffold_plan_omits_current_state_section(tmp_path: Path) -> None:
     assert "## Current State" not in content
     assert "## References" in content
     assert "## Contract Notes" in content
+    assert "## Steps" in content
+    assert "## Working Notes" in content
 
 
 def test_execute_start_runtime_blocks_reinitialization(tmp_path: Path) -> None:
@@ -297,7 +299,7 @@ def test_execute_start_runtime_allows_runbook_hint_with_mixed_code_docs_paths(tm
 
     assert result["reason_code"] is None
     assert (task_root / "plan.md").exists()
-    assert (task_root / "steps.md").exists()
+    assert not (task_root / "steps.md").exists()
     assert (task_root / "state.json").exists()
     assert (task_root / "logs").exists()
 

@@ -23,6 +23,7 @@
 
 ## Python Helper Boundary
 - Python helper는 scaffold/state write만 담당한다
+- 신규 runbook task에서는 `steps.md`를 만들지 않고 `plan.md` 안의 `Steps` / `Working Notes` section을 scaffold한다
 - helper command: `cd python && PYTHONPATH=src python3 -m harness.runtime_cli wf-start-runtime`
 
 ## Notes

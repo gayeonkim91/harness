@@ -361,6 +361,43 @@ def test_checkpoint_guard_blocks_current_step_ref_missing(tmp_path: Path) -> Non
     assert decision.reason_code == "CHECKPOINT_CURRENT_STEP_REF_MISSING"
 
 
+def test_checkpoint_guard_allows_inline_go_marker_without_current_step_ref(tmp_path: Path) -> None:
+    (tmp_path / "plan.md").write_text(
+        "# Plan\n\n## Steps\n\n- [ ] Implement one. (go)\n",
+        encoding="utf-8",
+    )
+
+    decision = run_guard(
+        GuardInput(
+            action="wf-checkpoint",
+            task_root=tmp_path,
+            state=_checkpoint_state(CurrentPhase.IMPLEMENTATION),
+            context={"phase": "implementation"},
+        )
+    )
+
+    assert decision.allow is True
+
+
+def test_checkpoint_guard_blocks_invalid_inline_marker_even_with_current_step_ref(tmp_path: Path) -> None:
+    (tmp_path / "plan.md").write_text(
+        "# Plan\n\n## Steps\n\n- [ ] Implement one. (go)\n- [ ] Implement two. (go)\n",
+        encoding="utf-8",
+    )
+
+    decision = run_guard(
+        GuardInput(
+            action="wf-checkpoint",
+            task_root=tmp_path,
+            state=_checkpoint_state(CurrentPhase.IMPLEMENTATION, current_step_ref="step:1"),
+            context={"phase": "implementation"},
+        )
+    )
+
+    assert decision.allow is False
+    assert decision.reason_code == "CHECKPOINT_CURRENT_STEP_REF_MISSING"
+
+
 def test_checkpoint_guard_allows_plan_phase_with_plan_artifact(tmp_path: Path) -> None:
     (tmp_path / "plan.md").write_text("# Plan\n", encoding="utf-8")
 

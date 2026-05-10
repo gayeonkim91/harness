@@ -440,7 +440,10 @@ def test_persist_checkpoint_runtime_blocks_snapshot_in_plan_without_log(tmp_path
 def test_persist_checkpoint_runtime_blocks_snapshot_mismatch_without_log(tmp_path: Path) -> None:
     task_root = tmp_path / "task"
     (task_root / "logs").mkdir(parents=True)
-    (task_root / "plan.md").write_text("# Plan\n", encoding="utf-8")
+    (task_root / "plan.md").write_text(
+        "# Plan\n\n## Steps\n\n- [ ] Do it. (go) [step_ref=S1]\n",
+        encoding="utf-8",
+    )
     _write_state(task_root, phase=CurrentPhase.IMPLEMENTATION, current_step_ref="S1")
 
     result = persist_checkpoint_runtime(
@@ -464,6 +467,152 @@ def test_persist_checkpoint_runtime_blocks_snapshot_mismatch_without_log(tmp_pat
     )
 
     assert result["reason_code"] == "CHECKPOINT_CURRENT_STEP_SNAPSHOT_INVALID"
+    assert not (task_root / "logs" / "checkpoints").exists()
+
+
+def test_persist_checkpoint_runtime_blocks_missing_inline_marker_even_with_state_ref(tmp_path: Path) -> None:
+    task_root = tmp_path / "task"
+    (task_root / "logs").mkdir(parents=True)
+    (task_root / "plan.md").write_text(
+        "# Plan\n\n## Steps\n\n- [ ] Implement one.\n",
+        encoding="utf-8",
+    )
+    _write_state(task_root, phase=CurrentPhase.IMPLEMENTATION, current_step_ref="step:1")
+
+    result = persist_checkpoint_runtime(
+        CheckpointRuntimeInput(
+            task_root=task_root,
+            workspace_root=REPO_ROOT,
+            checkpoint_result=CheckpointResult(
+                checkpoint_ref="",
+                phase=CurrentPhase.IMPLEMENTATION,
+                judgement_code=JudgementCode.GO,
+                summary="Missing marker.",
+                check_items=_check_items("implementation"),
+                basis_refs=["plan.md#steps"],
+                current_step_ref_snapshot=CurrentStepRefSnapshot(
+                    step_ref="step:1",
+                    step_text="Implement one.",
+                    go_marker_present=True,
+                ),
+            ),
+        )
+    )
+
+    assert result["reason_code"] == "CHECKPOINT_CURRENT_STEP_REF_MISSING"
+    assert not (task_root / "logs" / "checkpoints").exists()
+
+
+def test_persist_checkpoint_runtime_uses_inline_go_marker_snapshot(tmp_path: Path) -> None:
+    task_root = tmp_path / "task"
+    (task_root / "logs").mkdir(parents=True)
+    _write_state(task_root, phase=CurrentPhase.IMPLEMENTATION, current_step_ref=None)
+    (task_root / "plan.md").write_text(
+        "# Plan\n\n## Steps\n\n- [ ] Implement one. (go)\n- [ ] Implement two.\n",
+        encoding="utf-8",
+    )
+
+    result = persist_checkpoint_runtime(
+        CheckpointRuntimeInput(
+            task_root=task_root,
+            workspace_root=REPO_ROOT,
+            checkpoint_result=CheckpointResult(
+                checkpoint_ref="",
+                phase=CurrentPhase.IMPLEMENTATION,
+                judgement_code=JudgementCode.GO,
+                summary="Inline marker is current.",
+                check_items=_check_items("implementation"),
+                basis_refs=["plan.md#steps"],
+                current_step_ref_snapshot=CurrentStepRefSnapshot(
+                    step_ref="prompt-supplied",
+                    step_text="Implement one.",
+                    go_marker_present=True,
+                ),
+            ),
+        )
+    )
+
+    payload = json.loads((task_root / result["checkpoint_ref"]).read_text(encoding="utf-8"))
+
+    assert result["reason_code"] is None
+    assert payload["current_step_ref_snapshot"]["step_ref"] == "step:1"
+
+
+def test_persist_checkpoint_runtime_falls_back_to_legacy_steps_for_placeholder_plan_steps(tmp_path: Path) -> None:
+    task_root = tmp_path / "task"
+    (task_root / "logs").mkdir(parents=True)
+    _write_state(task_root, phase=CurrentPhase.IMPLEMENTATION, current_step_ref="S1")
+    (task_root / "plan.md").write_text(
+        "# Plan\n\n"
+        "## 진행 단계 (Steps)\n"
+        "<!-- harness:steps-placeholder -->\n"
+        "<!-- step은 실제 작업으로 적는다. -->\n"
+        "- [ ] Step 1: <첫 번째 독립 작업 단위>\n"
+        "- [ ] ...\n",
+        encoding="utf-8",
+    )
+    (task_root / "steps.md").write_text(
+        "# Steps\n\n## Steps\n\n- [ ] Implement legacy step. (go) [step_ref=S1]\n\n## Working Notes\n",
+        encoding="utf-8",
+    )
+
+    result = persist_checkpoint_runtime(
+        CheckpointRuntimeInput(
+            task_root=task_root,
+            workspace_root=REPO_ROOT,
+            checkpoint_result=CheckpointResult(
+                checkpoint_ref="",
+                phase=CurrentPhase.IMPLEMENTATION,
+                judgement_code=JudgementCode.GO,
+                summary="Legacy marker is current.",
+                check_items=_check_items("implementation"),
+                basis_refs=["steps.md#s1"],
+                current_step_ref_snapshot=CurrentStepRefSnapshot(
+                    step_ref="S1",
+                    step_text="Implement legacy step.",
+                    go_marker_present=True,
+                ),
+            ),
+        )
+    )
+
+    assert result["reason_code"] is None
+
+
+def test_persist_checkpoint_runtime_blocks_invalid_inline_steps_even_with_legacy_steps(tmp_path: Path) -> None:
+    task_root = tmp_path / "task"
+    (task_root / "logs").mkdir(parents=True)
+    _write_state(task_root, phase=CurrentPhase.IMPLEMENTATION, current_step_ref="S1")
+    (task_root / "plan.md").write_text(
+        "# Plan\n\n## Steps\n\n- malformed inline step\n",
+        encoding="utf-8",
+    )
+    (task_root / "steps.md").write_text(
+        "# Steps\n\n## Steps\n\n- [ ] Implement legacy step. (go) [step_ref=S1]\n\n## Working Notes\n",
+        encoding="utf-8",
+    )
+
+    result = persist_checkpoint_runtime(
+        CheckpointRuntimeInput(
+            task_root=task_root,
+            workspace_root=REPO_ROOT,
+            checkpoint_result=CheckpointResult(
+                checkpoint_ref="",
+                phase=CurrentPhase.IMPLEMENTATION,
+                judgement_code=JudgementCode.GO,
+                summary="Inline is invalid.",
+                check_items=_check_items("implementation"),
+                basis_refs=["steps.md#s1"],
+                current_step_ref_snapshot=CurrentStepRefSnapshot(
+                    step_ref="S1",
+                    step_text="Implement legacy step.",
+                    go_marker_present=True,
+                ),
+            ),
+        )
+    )
+
+    assert result["reason_code"] == "CHECKPOINT_CURRENT_STEP_REF_MISSING"
     assert not (task_root / "logs" / "checkpoints").exists()
 
 

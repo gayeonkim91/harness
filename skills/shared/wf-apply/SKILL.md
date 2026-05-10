@@ -10,8 +10,9 @@
 
 ## Python Helper Boundary
 - action validation, in-memory apply, file write, deferred state handoff는 Python helper가 담당한다
+- `target=steps` action은 신규 task에서 `plan.md` inline `Steps` / `Working Notes`에 적용된다
 - helper command: `cd python && PYTHONPATH=src python3 -m harness.runtime_cli wf-apply-runtime`
 
 ## Notes
 - semantic rewrite는 이 skill이나 Python helper가 대신하지 않는다
-- plan/steps 본문 재작성은 main agent 책임이다
+- plan 본문과 inline Steps 의미 재작성은 main agent 책임이다

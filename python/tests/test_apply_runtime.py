@@ -66,8 +66,26 @@ def _write_artifacts(task_root: Path) -> None:
     _write_state(task_root)
 
 
+def _write_inline_plan_artifacts(task_root: Path) -> None:
+    task_root.mkdir(parents=True)
+    _write_state(task_root, current_step_ref=None)
+    (task_root / "plan.md").write_text(
+        "# Plan\n\n"
+        "## Contract Notes\n\n"
+        "## Steps\n\n"
+        "- [ ] Implement one. (go)\n"
+        "- [ ] Implement two.\n\n"
+        "## Working Notes\n",
+        encoding="utf-8",
+    )
+
+
 def _snapshot() -> CurrentStepRefSnapshot:
     return CurrentStepRefSnapshot(step_ref="S1", step_text="Implement one.", go_marker_present=True)
+
+
+def _inline_snapshot() -> CurrentStepRefSnapshot:
+    return CurrentStepRefSnapshot(step_ref="step:1", step_text="Implement one.", go_marker_present=True)
 
 
 def _transition(next_phase: CurrentPhase = CurrentPhase.IMPLEMENTATION) -> DeferredStateTransition:
@@ -114,8 +132,120 @@ def test_apply_runtime_applies_plan_and_steps_notes(tmp_path: Path) -> None:
     assert result.reason_code is None
     assert sorted(result.updated_artifacts) == ["plan", "steps"]
     assert "- [contract-note] Keep API stable." in (task_root / "plan.md").read_text(encoding="utf-8")
-    assert "Follow up during implementation." in (task_root / "steps.md").read_text(encoding="utf-8")
+    steps = (task_root / "steps.md").read_text(encoding="utf-8")
+    assert "- [step_ref=S1] Follow up during implementation." in steps
     assert read_state(task_root / "state.json").current_phase == CurrentPhase.STEP
+
+
+def test_apply_runtime_does_not_mutate_input_step_action(tmp_path: Path) -> None:
+    task_root = tmp_path / "task"
+    _write_artifacts(task_root)
+    snapshot_payload = {"step_ref": "S1", "step_text": "Implement one.", "go_marker_present": True}
+    params = {
+        "current_step_ref_snapshot": snapshot_payload,
+        "note_text": "Keep caller action untouched.",
+        "note_basis_refs": [],
+    }
+    action = ArtifactAction(
+        target="steps",
+        action="steps.record_working_note",
+        params=params,
+        basis_ref="logs/checkpoints/checkpoint.json",
+    )
+
+    result = execute_apply_runtime(
+        ApplyRuntimeInput(
+            task_root=task_root,
+            required_artifact_actions=[action],
+            deferred_state_transition=_transition(CurrentPhase.IMPLEMENTATION),
+        )
+    )
+
+    assert result.apply_status.value == "APPLIED"
+    assert action.target == "steps"
+    assert action.params is params
+    assert action.params["current_step_ref_snapshot"] is snapshot_payload
+    assert result.applied_actions[0] is not action
+    assert result.applied_actions[0].target == ArtifactTarget.STEPS
+    assert isinstance(result.applied_actions[0].params["current_step_ref_snapshot"], CurrentStepRefSnapshot)
+    assert result.applied_actions[0].params["current_step_ref_snapshot"] is not snapshot_payload
+
+
+def test_apply_runtime_falls_back_to_legacy_steps_when_plan_steps_are_placeholder(tmp_path: Path) -> None:
+    task_root = tmp_path / "task"
+    _write_artifacts(task_root)
+    (task_root / "plan.md").write_text(
+        "# Plan\n\n"
+        "## 진행 단계 (Steps)\n"
+        "<!-- harness:steps-placeholder -->\n"
+        "<!-- step은 실제 작업으로 적는다. -->\n"
+        "- [ ] Step 1: <첫 번째 독립 작업 단위>\n"
+        "- [ ] Step 2: <다음 독립 작업 단위>\n"
+        "- [ ] ...\n",
+        encoding="utf-8",
+    )
+
+    result = execute_apply_runtime(
+        ApplyRuntimeInput(
+            task_root=task_root,
+            required_artifact_actions=[
+                ArtifactAction(
+                    target=ArtifactTarget.STEPS,
+                    action="steps.record_working_note",
+                    params={
+                        "current_step_ref_snapshot": _snapshot(),
+                        "note_text": "Use the real legacy step.",
+                        "note_basis_refs": [],
+                    },
+                    basis_ref="logs/checkpoints/checkpoint.json",
+                )
+            ],
+            deferred_state_transition=_transition(CurrentPhase.IMPLEMENTATION),
+        )
+    )
+
+    plan = (task_root / "plan.md").read_text(encoding="utf-8")
+    steps = (task_root / "steps.md").read_text(encoding="utf-8")
+
+    assert result.apply_status.value == "APPLIED"
+    assert result.updated_artifacts == ["steps"]
+    assert "Use the real legacy step." not in plan
+    assert "- [step_ref=S1] Use the real legacy step." in steps
+
+
+def test_apply_runtime_blocks_invalid_inline_steps_instead_of_legacy_fallback(tmp_path: Path) -> None:
+    task_root = tmp_path / "task"
+    _write_artifacts(task_root)
+    (task_root / "plan.md").write_text(
+        "# Plan\n\n"
+        "## Steps\n\n"
+        "- malformed inline step\n",
+        encoding="utf-8",
+    )
+    original_steps = (task_root / "steps.md").read_text(encoding="utf-8")
+
+    result = execute_apply_runtime(
+        ApplyRuntimeInput(
+            task_root=task_root,
+            required_artifact_actions=[
+                ArtifactAction(
+                    target=ArtifactTarget.STEPS,
+                    action="steps.record_working_note",
+                    params={
+                        "current_step_ref_snapshot": _snapshot(),
+                        "note_text": "Must not fall back.",
+                        "note_basis_refs": [],
+                    },
+                    basis_ref="logs/checkpoints/checkpoint.json",
+                )
+            ],
+            deferred_state_transition=_transition(CurrentPhase.IMPLEMENTATION),
+        )
+    )
+
+    assert result.apply_status.value == "BLOCKED"
+    assert result.reason_code == "APPLY_STEP_REF_INVALID"
+    assert (task_root / "steps.md").read_text(encoding="utf-8") == original_steps
 
 
 def test_apply_runtime_blocks_deferred_transition_against_docs_only_state(tmp_path: Path) -> None:
@@ -302,6 +432,179 @@ def test_apply_runtime_marks_clears_and_selects_next_step(tmp_path: Path) -> Non
     assert result.current_step_ref_update_mode == "set"
     assert result.resolved_current_step_ref == "S2"
     assert state.current_step_ref == "S2"
+
+
+def test_apply_runtime_applies_step_actions_to_inline_plan_steps(tmp_path: Path) -> None:
+    task_root = tmp_path / "task"
+    _write_inline_plan_artifacts(task_root)
+
+    result = execute_apply_runtime(
+        ApplyRuntimeInput(
+            task_root=task_root,
+            required_artifact_actions=[
+                ArtifactAction(
+                    target=ArtifactTarget.STEPS,
+                    action="steps.mark_current_step_done",
+                    params={"current_step_ref_snapshot": _inline_snapshot()},
+                    basis_ref="logs/checkpoints/checkpoint.json",
+                ),
+                ArtifactAction(
+                    target=ArtifactTarget.STEPS,
+                    action="steps.clear_current_step",
+                    params={"current_step_ref_snapshot": _inline_snapshot()},
+                    basis_ref="logs/checkpoints/checkpoint.json",
+                ),
+                ArtifactAction(
+                    target=ArtifactTarget.STEPS,
+                    action="steps.select_next_go_step",
+                    params={
+                        "current_step_ref_snapshot": _inline_snapshot(),
+                        "selection_basis": SelectionBasis(mode=SelectionMode.NEXT_PENDING_AFTER_CURRENT),
+                    },
+                    basis_ref="logs/checkpoints/checkpoint.json",
+                ),
+            ],
+            deferred_state_transition=_transition(),
+        )
+    )
+
+    plan = (task_root / "plan.md").read_text(encoding="utf-8")
+    state = read_state(task_root / "state.json")
+
+    assert result.apply_status.value == "APPLIED"
+    assert result.updated_artifacts == ["plan"]
+    assert not (task_root / "steps.md").exists()
+    assert "- [x] Implement one." in plan
+    assert "- [ ] Implement two. (go)" in plan
+    assert result.current_step_ref_update_mode == "set"
+    assert result.resolved_current_step_ref == "step:2"
+    assert state.current_step_ref == "step:2"
+
+
+def test_apply_runtime_keeps_inline_step_locator_stable_when_plan_note_precedes_steps(tmp_path: Path) -> None:
+    task_root = tmp_path / "task"
+    _write_inline_plan_artifacts(task_root)
+
+    result = execute_apply_runtime(
+        ApplyRuntimeInput(
+            task_root=task_root,
+            required_artifact_actions=[
+                ArtifactAction(
+                    target=ArtifactTarget.PLAN,
+                    action="plan.record_contract_note",
+                    params={"note_text": "Plan note before steps.", "note_basis_refs": []},
+                    basis_ref="logs/checkpoints/checkpoint.json",
+                ),
+                ArtifactAction(
+                    target=ArtifactTarget.STEPS,
+                    action="steps.clear_current_step",
+                    params={"current_step_ref_snapshot": _inline_snapshot()},
+                    basis_ref="logs/checkpoints/checkpoint.json",
+                ),
+            ],
+            deferred_state_transition=_transition(CurrentPhase.IMPLEMENTATION),
+        )
+    )
+
+    plan = (task_root / "plan.md").read_text(encoding="utf-8")
+
+    assert result.apply_status.value == "APPLIED"
+    assert result.updated_artifacts == ["plan"]
+    assert "- [contract-note] Plan note before steps." in plan
+    assert "- [ ] Implement one." in plan
+    assert "- [ ] Implement one. (go)" not in plan
+
+
+def test_apply_runtime_uses_korean_section_aliases_for_manual_template_plan(tmp_path: Path) -> None:
+    task_root = tmp_path / "task"
+    task_root.mkdir(parents=True)
+    _write_state(task_root, current_step_ref=None)
+    (task_root / "plan.md").write_text(
+        "# Plan\n\n"
+        "## 계약 메모 (Contract Notes)\n\n"
+        "## 진행 단계 (Steps)\n"
+        "<!-- step은 실제 작업으로 적는다. -->\n"
+        "- [ ] Implement one. (go)\n\n"
+        "## 작업 노트 (Working Notes)\n",
+        encoding="utf-8",
+    )
+
+    result = execute_apply_runtime(
+        ApplyRuntimeInput(
+            task_root=task_root,
+            required_artifact_actions=[
+                ArtifactAction(
+                    target=ArtifactTarget.PLAN,
+                    action="plan.record_contract_note",
+                    params={"note_text": "Korean contract section.", "note_basis_refs": []},
+                    basis_ref="logs/checkpoints/checkpoint.json",
+                ),
+                ArtifactAction(
+                    target=ArtifactTarget.STEPS,
+                    action="steps.record_working_note",
+                    params={
+                        "current_step_ref_snapshot": _inline_snapshot(),
+                        "note_text": "Korean working notes section.",
+                        "note_basis_refs": [],
+                    },
+                    basis_ref="logs/checkpoints/checkpoint.json",
+                ),
+            ],
+            deferred_state_transition=_transition(CurrentPhase.IMPLEMENTATION),
+        )
+    )
+
+    plan = (task_root / "plan.md").read_text(encoding="utf-8")
+
+    assert result.apply_status.value == "APPLIED"
+    assert "## Contract Notes\n" not in plan
+    assert "## Working Notes\n" not in plan
+    assert "- [contract-note] Korean contract section." in plan
+    assert "- [step] Implement one.: Korean working notes section." in plan
+
+
+def test_apply_runtime_normalizes_trailing_whitespace_when_moving_inline_go_marker(tmp_path: Path) -> None:
+    task_root = tmp_path / "task"
+    task_root.mkdir(parents=True)
+    _write_state(task_root, current_step_ref=None)
+    (task_root / "plan.md").write_text(
+        "# Plan\n\n"
+        "## Steps\n\n"
+        "- [ ] Implement one. (go)   \n"
+        "- [ ] Implement two.   \n\n"
+        "## Working Notes\n",
+        encoding="utf-8",
+    )
+
+    result = execute_apply_runtime(
+        ApplyRuntimeInput(
+            task_root=task_root,
+            required_artifact_actions=[
+                ArtifactAction(
+                    target=ArtifactTarget.STEPS,
+                    action="steps.clear_current_step",
+                    params={"current_step_ref_snapshot": _inline_snapshot()},
+                    basis_ref="logs/checkpoints/checkpoint.json",
+                ),
+                ArtifactAction(
+                    target=ArtifactTarget.STEPS,
+                    action="steps.select_next_go_step",
+                    params={
+                        "current_step_ref_snapshot": _inline_snapshot(),
+                        "selection_basis": SelectionBasis(mode=SelectionMode.NEXT_PENDING_AFTER_CURRENT),
+                    },
+                    basis_ref="logs/checkpoints/checkpoint.json",
+                ),
+            ],
+            deferred_state_transition=_transition(),
+        )
+    )
+
+    plan = (task_root / "plan.md").read_text(encoding="utf-8")
+
+    assert result.apply_status.value == "APPLIED"
+    assert "- [ ] Implement one.\n" in plan
+    assert "- [ ] Implement two. (go)\n" in plan
 
 
 def test_apply_runtime_blocks_unsupported_action_without_writes(tmp_path: Path) -> None:

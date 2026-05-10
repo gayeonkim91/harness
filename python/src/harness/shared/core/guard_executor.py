@@ -11,6 +11,7 @@ from harness.shared.contracts.profile import RepoProfile
 from harness.shared.core.phase_spec_loader import PhaseSpecLoadError, resolve_workspace_root
 from harness.shared.core.repo_profile_loader import RepoProfileLoadError, load_repo_profile
 from harness.shared.core.start_mode_resolver import DEFAULT_REPO_PROFILE_REF
+from harness.shared.core.step_source import resolve_current_go_snapshot
 from harness.shared.contracts.state import CurrentPhase, GuardStateMutation, HarnessState, SessionState, WorkflowMode
 from harness.shared.contracts.workflow import WorkflowKind
 
@@ -40,16 +41,15 @@ def _detect_start_init_reason(task_root: Path) -> str | None:
     if not task_root.exists():
         return None
 
-    artifact_presence = [
-        (task_root / "plan.md").exists(),
-        (task_root / "steps.md").exists(),
-        (task_root / "state.json").exists(),
-        (task_root / "logs").is_dir(),
-    ]
-    present_count = sum(artifact_presence)
-    if present_count == 4:
+    plan_present = (task_root / "plan.md").exists()
+    state_present = (task_root / "state.json").exists()
+    logs_present = (task_root / "logs").is_dir()
+    steps_present = (task_root / "steps.md").exists()
+    canonical_presence = [plan_present, state_present, logs_present]
+    present_count = sum(canonical_presence) + (1 if steps_present else 0)
+    if all(canonical_presence):
         return "START_TASK_ALREADY_INITIALIZED"
-    if 0 < present_count < 4:
+    if present_count > 0:
         return "START_TASK_INIT_PARTIAL"
     return None
 
@@ -233,12 +233,17 @@ def _run_checkpoint_guard(input_data: GuardInput) -> GuardDecision:
             message_summary="`/wf-checkpoint` requires plan.md.",
         )
 
-    if state.current_phase in {CurrentPhase.STEP, CurrentPhase.IMPLEMENTATION} and not state.current_step_ref:
-        return GuardDecision(
-            allow=False,
-            reason_code="CHECKPOINT_CURRENT_STEP_REF_MISSING",
-            message_summary="`/wf-checkpoint` requires current_step_ref for step-bearing phases.",
-        )
+    if state.current_phase in {CurrentPhase.STEP, CurrentPhase.IMPLEMENTATION}:
+        try:
+            _, marker_reason = resolve_current_go_snapshot(task_root)
+        except OSError:
+            marker_reason = "CHECKPOINT_CURRENT_STEP_REF_MISSING"
+        if marker_reason is not None:
+            return GuardDecision(
+                allow=False,
+                reason_code="CHECKPOINT_CURRENT_STEP_REF_MISSING",
+                message_summary="`/wf-checkpoint` requires one current `(go)` marker for step-bearing phases.",
+            )
 
     if state.workflow_mode == WorkflowMode.GUIDED:
         if not state.repo_profile_ref:

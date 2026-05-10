@@ -31,3 +31,31 @@ def test_steps_parser_ignores_fenced_steps_section() -> None:
 
     assert result.reason_code is None
     assert [step.step_ref for step in result.steps] == ["S1"]
+
+
+def test_steps_parser_allows_inline_plan_steps_without_step_ref() -> None:
+    result = parse_steps(
+        "# Plan\n\n"
+        "## 진행 단계 (Steps)\n\n"
+        "- [ ] Draft the change. (go)\n"
+        "- [ ] Apply the change.\n"
+    )
+
+    assert result.reason_code is None
+    assert [step.text for step in result.steps] == ["Draft the change.", "Apply the change."]
+    assert result.steps[0].step_ref == "step:1"
+    assert result.steps[0].go_marker_present is True
+    assert result.steps[1].legacy_step_ref is None
+
+
+def test_steps_parser_ignores_html_comments_in_steps_section() -> None:
+    result = parse_steps(
+        "# Plan\n\n"
+        "## 진행 단계 (Steps)\n"
+        "<!-- step은 실제 작업으로 적는다. -->\n"
+        "- [ ] Implement one. (go)\n"
+    )
+
+    assert result.reason_code is None
+    assert len(result.steps) == 1
+    assert result.steps[0].text == "Implement one."

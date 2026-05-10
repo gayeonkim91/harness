@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from harness.shared.artifacts.apply_sink import record_apply_partial_recovery
+from harness.shared.artifacts.plan_artifact import append_to_section
 from harness.shared.artifacts.state_artifact import apply_deferred_transition_with_apply_result, read_state
 from harness.shared.contracts.actions import (
     ArtifactAction,
@@ -26,6 +27,7 @@ from harness.shared.contracts.state import (
 )
 from harness.shared.core.json_util import to_jsonable
 from harness.shared.core.state_migration import StateMigrationError
+from harness.shared.core.step_source import resolve_step_artifact
 from harness.shared.core.steps_parser import ParsedStep, StepParseResult, find_step, parse_steps
 from harness.shared.core.task_paths import get_task_paths
 
@@ -63,14 +65,29 @@ def execute_apply_runtime(input_data: ApplyRuntimeInput) -> ApplyResult:
     unsupported = _first_unsupported_action(actions)
     if unsupported is not None:
         return _blocked(unsupported)
+
+    step_artifact = None
+    if steps_actions:
+        try:
+            step_artifact = resolve_step_artifact(task_paths.task_root)
+        except OSError:
+            return _blocked("APPLY_TARGET_ARTIFACT_MISSING")
+        if step_artifact is None:
+            return _blocked("APPLY_TARGET_ARTIFACT_MISSING")
+    steps_target_is_plan = step_artifact is not None and step_artifact.path == task_paths.plan_path
+
     if plan_actions and not task_paths.plan_path.exists():
-        return _blocked("APPLY_TARGET_ARTIFACT_MISSING")
-    if steps_actions and not task_paths.steps_path.exists():
         return _blocked("APPLY_TARGET_ARTIFACT_MISSING")
 
     try:
-        plan_content = task_paths.plan_path.read_text(encoding="utf-8") if plan_actions else None
-        steps_content = task_paths.steps_path.read_text(encoding="utf-8") if steps_actions else None
+        plan_content = None
+        if plan_actions or steps_target_is_plan:
+            plan_content = (
+                step_artifact.content
+                if steps_target_is_plan and step_artifact is not None
+                else task_paths.plan_path.read_text(encoding="utf-8")
+            )
+        steps_content = step_artifact.content if step_artifact is not None else None
     except OSError:
         return _blocked("APPLY_TARGET_ARTIFACT_MISSING")
 
@@ -85,32 +102,45 @@ def execute_apply_runtime(input_data: ApplyRuntimeInput) -> ApplyResult:
     updated_artifacts: set[str] = set()
 
     next_plan = plan_content
-    next_steps = steps_content
+    next_steps = None if steps_target_is_plan else steps_content
     for action in actions:
         if action.target == ArtifactTarget.PLAN:
             assert next_plan is not None
             rendered, changed = _apply_plan_action(next_plan, action)
             next_plan = rendered
+            artifact_name = "plan"
         else:
-            assert next_steps is not None
+            step_content = next_plan if steps_target_is_plan else next_steps
+            assert step_content is not None
             assert base_steps is not None
-            validation_reason = _validate_step_action_against_base(action, base_steps)
+            normalized_action, validation_reason = _normalize_step_action_against_base(action, base_steps)
             if validation_reason is not None:
                 return _blocked(validation_reason)
-            rendered, changed, reason = _apply_steps_action(next_steps, action)
+            assert normalized_action is not None
+            rendered, changed, reason = _apply_steps_action(
+                step_content,
+                normalized_action,
+                legacy_note_format=step_artifact is not None and step_artifact.artifact_name == "steps",
+            )
             if reason is not None:
                 return _blocked(reason)
-            next_steps = rendered
+            if steps_target_is_plan:
+                next_plan = rendered
+            else:
+                next_steps = rendered
+            artifact_name = step_artifact.artifact_name if step_artifact is not None else action.target.value
 
         if changed:
-            applied.append(action)
-            updated_artifacts.add(action.target.value)
+            applied.append(normalized_action if action.target == ArtifactTarget.STEPS else action)
+            updated_artifacts.add(artifact_name)
         else:
-            noop.append(action)
+            noop.append(normalized_action if action.target == ArtifactTarget.STEPS else action)
 
-    current_step_ref_update_mode, resolved_current_step_ref, pointer_reason = _resolve_current_step_ref_update(
-        steps_content,
-        next_steps,
+    final_steps_content = next_plan if steps_target_is_plan else next_steps
+    current_step_ref_update_mode, resolved_current_step_ref, pointer_reason = (
+        _resolve_current_step_ref_update(steps_content, final_steps_content)
+        if steps_actions
+        else ("unchanged", None, None)
     )
     if pointer_reason is not None:
         return _blocked(pointer_reason)
@@ -120,9 +150,14 @@ def execute_apply_runtime(input_data: ApplyRuntimeInput) -> ApplyResult:
         if next_plan is not None and next_plan != plan_content:
             _atomic_write(task_paths.plan_path, next_plan)
             committed_artifacts.append("plan")
-        if next_steps is not None and next_steps != steps_content:
-            _atomic_write(task_paths.steps_path, next_steps)
-            committed_artifacts.append("steps")
+        if (
+            not steps_target_is_plan
+            and step_artifact is not None
+            and next_steps is not None
+            and next_steps != steps_content
+        ):
+            _atomic_write(step_artifact.path, next_steps)
+            committed_artifacts.append(step_artifact.artifact_name)
     except OSError:
         committed_targets = set(committed_artifacts)
         recovery_ref = record_apply_partial_recovery(
@@ -177,9 +212,12 @@ SUPPORTED_ACTIONS = {
 
 def _normalize_action(action: ArtifactAction | dict[str, Any]) -> ArtifactAction:
     if isinstance(action, ArtifactAction):
-        action.target = ArtifactTarget(action.target)
-        action.params = _normalize_action_params(action.params)
-        return action
+        return ArtifactAction(
+            target=ArtifactTarget(action.target),
+            action=str(action.action),
+            params=_normalize_action_params(action.params),
+            basis_ref=str(action.basis_ref),
+        )
     payload = dict(action)
     return ArtifactAction(
         target=ArtifactTarget(payload["target"]),
@@ -255,23 +293,6 @@ def _atomic_write(path: Path, content: str) -> None:
     tmp_path.replace(path)
 
 
-def _append_to_section(content: str, section_header: str, entry: str) -> str:
-    marker = f"## {section_header}\n"
-    if marker not in content:
-        suffix = "\n" if not content.endswith("\n") else ""
-        return f"{content}{suffix}{marker}\n{entry}\n"
-    start = content.index(marker) + len(marker)
-    remainder = content[start:]
-    next_header_rel = remainder.find("\n## ")
-    section_body = remainder if next_header_rel == -1 else remainder[:next_header_rel]
-    tail = "" if next_header_rel == -1 else remainder[next_header_rel:]
-    if entry in section_body.splitlines():
-        return content
-    if section_body and not section_body.endswith("\n"):
-        section_body += "\n"
-    return f"{content[:start]}{section_body}{entry}\n{tail}"
-
-
 def _apply_plan_action(content: str, action: ArtifactAction) -> tuple[str, bool]:
     if action.action == "plan.record_contract_note":
         note_text = str(action.params["note_text"])
@@ -281,36 +302,70 @@ def _apply_plan_action(content: str, action: ArtifactAction) -> tuple[str, bool]
             entry += f" [basis_refs={', '.join(basis_refs)}]"
     else:
         entry = f"- [rewrite-required] {action.params['rewrite_reason_code']} [basis_ref={action.basis_ref}]"
-    rendered = _append_to_section(content, "Contract Notes", entry)
+    rendered = append_to_section(content, "Contract Notes", entry)
     return rendered, rendered != content
 
 
-def _validate_step_action_against_base(action: ArtifactAction, base_steps: StepParseResult) -> str | None:
+def _normalize_step_action_against_base(
+    action: ArtifactAction,
+    base_steps: StepParseResult,
+) -> tuple[ArtifactAction | None, str | None]:
     snapshot = action.params.get("current_step_ref_snapshot")
     if not isinstance(snapshot, CurrentStepRefSnapshot):
-        return "APPLY_CURRENT_STEP_REF_SNAPSHOT_REQUIRED"
+        return None, "APPLY_CURRENT_STEP_REF_SNAPSHOT_REQUIRED"
     matching_step = find_step(base_steps.steps, snapshot.step_ref)
     if matching_step is None:
-        return "APPLY_CURRENT_STEP_REF_SNAPSHOT_MISMATCH"
+        return None, "APPLY_CURRENT_STEP_REF_SNAPSHOT_MISMATCH"
     if matching_step.text != snapshot.step_text.strip():
-        return "APPLY_CURRENT_STEP_REF_SNAPSHOT_MISMATCH"
+        return None, "APPLY_CURRENT_STEP_REF_SNAPSHOT_MISMATCH"
     if matching_step.go_marker_present != snapshot.go_marker_present:
-        return "APPLY_CURRENT_STEP_REF_SNAPSHOT_MISMATCH"
-    return None
+        return None, "APPLY_CURRENT_STEP_REF_SNAPSHOT_MISMATCH"
+    normalized_params = dict(action.params)
+    normalized_params["current_step_ref_snapshot"] = CurrentStepRefSnapshot(
+        step_ref=matching_step.step_ref,
+        step_text=matching_step.text,
+        go_marker_present=matching_step.go_marker_present,
+    )
+    return (
+        ArtifactAction(
+            target=action.target,
+            action=action.action,
+            params=normalized_params,
+            basis_ref=action.basis_ref,
+        ),
+        None,
+    )
 
 
-def _apply_steps_action(content: str, action: ArtifactAction) -> tuple[str, bool, str | None]:
+def _apply_steps_action(
+    content: str,
+    action: ArtifactAction,
+    *,
+    legacy_note_format: bool = False,
+) -> tuple[str, bool, str | None]:
     snapshot = action.params["current_step_ref_snapshot"]
     if action.action == "steps.record_working_note":
-        entry = f"- [step_ref={snapshot.step_ref}] {action.params['note_text']}"
+        if legacy_note_format:
+            entry = f"- [step_ref={snapshot.step_ref}] {action.params['note_text']}"
+        else:
+            entry = f"- [step] {snapshot.step_text}: {action.params['note_text']}"
         basis_refs = [str(item) for item in action.params.get("note_basis_refs", [])]
         if basis_refs:
             entry += f" [basis_refs={', '.join(basis_refs)}]"
-        rendered = _append_to_section(content, "Working Notes", entry)
+        rendered = append_to_section(content, "Working Notes", entry)
         return rendered, rendered != content, None
     if action.action == "steps.rewrite_required":
-        entry = f"- [step_ref={snapshot.step_ref}] rewrite-required:{action.params['rewrite_reason_code']} [basis_ref={action.basis_ref}]"
-        rendered = _append_to_section(content, "Working Notes", entry)
+        if legacy_note_format:
+            entry = (
+                f"- [step_ref={snapshot.step_ref}] rewrite-required:{action.params['rewrite_reason_code']} "
+                f"[basis_ref={action.basis_ref}]"
+            )
+        else:
+            entry = (
+                f"- [step] {snapshot.step_text}: rewrite-required:{action.params['rewrite_reason_code']} "
+                f"[basis_ref={action.basis_ref}]"
+            )
+        rendered = append_to_section(content, "Working Notes", entry)
         return rendered, rendered != content, None
 
     parsed = parse_steps(content)
@@ -330,7 +385,7 @@ def _apply_steps_action(content: str, action: ArtifactAction) -> tuple[str, bool
             if snapshot.go_marker_present:
                 return content, False, "APPLY_CURRENT_STEP_REF_SNAPSHOT_MISMATCH"
             return content, False, None
-        lines[step.line_index] = lines[step.line_index].replace(" (go) [step_ref=", " [step_ref=", 1)
+        lines[step.line_index] = _render_step_go_marker(lines[step.line_index], step, go_present=False)
         return "\n".join(lines) + ("\n" if content.endswith("\n") else ""), True, None
     selection_basis = action.params.get("selection_basis")
     if not isinstance(selection_basis, SelectionBasis):
@@ -340,8 +395,22 @@ def _apply_steps_action(content: str, action: ArtifactAction) -> tuple[str, bool
     target = _select_step(parsed.steps, snapshot.step_ref, selection_basis)
     if target is None:
         return content, False, "APPLY_SELECTION_TARGET_NOT_FOUND"
-    lines[target.line_index] = lines[target.line_index].replace(f" [step_ref={target.step_ref}]", f" (go) [step_ref={target.step_ref}]", 1)
+    lines[target.line_index] = _render_step_go_marker(lines[target.line_index], target, go_present=True)
     return "\n".join(lines) + ("\n" if content.endswith("\n") else ""), True, None
+
+
+def _render_step_go_marker(line: str, step: ParsedStep, *, go_present: bool) -> str:
+    if step.legacy_step_ref is not None:
+        marker = f" [step_ref={step.legacy_step_ref}]"
+        if go_present:
+            return line.replace(marker, f" (go){marker}", 1)
+        return line.replace(f" (go){marker}", marker, 1)
+    stripped = line.rstrip()
+    if go_present:
+        return stripped if stripped.endswith(" (go)") else f"{stripped} (go)"
+    if stripped.endswith(" (go)"):
+        return stripped[: -len(" (go)")]
+    return stripped
 
 
 def _resolve_current_step_ref_update(

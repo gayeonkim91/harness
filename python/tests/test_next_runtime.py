@@ -345,6 +345,27 @@ def test_next_checkpoint_implementation_go_selects_next_step_when_remaining(tmp_
     assert selection_basis.mode.value == "next_pending_after_current"
 
 
+def test_next_checkpoint_blocks_when_snapshot_no_longer_matches_step_source(tmp_path: Path) -> None:
+    task_root = tmp_path / "task"
+    task_root.mkdir()
+    _write_state(task_root, CurrentPhase.IMPLEMENTATION, current_step_ref="step:1")
+    (task_root / "plan.md").write_text(
+        "# Plan\n\n## Steps\n\n- [ ] Different step text. (go)\n- [ ] Implement two.\n",
+        encoding="utf-8",
+    )
+    ref = _write_checkpoint(
+        task_root,
+        "implementation",
+        "GO",
+        current_step_ref_snapshot={"step_ref": "step:1", "step_text": "Implement one.", "go_marker_present": True},
+    )
+
+    result = _next(task_root, ref, CurrentPhase.IMPLEMENTATION)
+
+    assert result.reason_code == "NEXT_CURRENT_STEP_CONTEXT_UNRESOLVABLE"
+    assert result.required_artifact_actions == []
+
+
 def test_next_checkpoint_implementation_ignores_nested_pending_steps(tmp_path: Path) -> None:
     task_root = tmp_path / "task"
     task_root.mkdir()

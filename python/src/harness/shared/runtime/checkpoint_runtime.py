@@ -16,6 +16,7 @@ from harness.shared.contracts.state import CurrentPhase, HarnessState
 from harness.shared.core.guard_executor import GuardInput, run_guard
 from harness.shared.core.phase_spec_loader import PhaseSpec, PhaseSpecLoadError, load_phase_spec, resolve_workspace_root
 from harness.shared.core.state_migration import StateMigrationError
+from harness.shared.core.step_source import resolve_current_go_snapshot
 from harness.shared.core.task_paths import get_task_paths
 from harness.shared.core.timestamp import kst_now_human, kst_now_iso
 
@@ -29,6 +30,10 @@ CAUSE_REQUIRED_JUDGEMENTS = {
 }
 
 CHECK_ITEM_RESULTS = {"YES", "NO", "N/A"}
+
+
+def _is_ephemeral_step_ref(step_ref: str) -> bool:
+    return step_ref.startswith("step:") and step_ref[5:].isdigit()
 
 
 @dataclass(slots=True)
@@ -164,7 +169,12 @@ def _blocked_checkpoint_output(reason_code: str, message_summary: str | None = N
     }
 
 
-def _validate_checkpoint_result(result: CheckpointResult, state: HarnessState, phase_spec: PhaseSpec) -> str | None:
+def _validate_checkpoint_result(
+    result: CheckpointResult,
+    state: HarnessState,
+    phase_spec: PhaseSpec,
+    current_go_snapshot: CurrentStepRefSnapshot | None = None,
+) -> str | None:
     if not result.summary.strip():
         return "CHECKPOINT_RESULT_CONTRACT_INVALID"
     if result.phase != state.current_phase:
@@ -185,7 +195,14 @@ def _validate_checkpoint_result(result: CheckpointResult, state: HarnessState, p
     else:
         if result.current_step_ref_snapshot is None:
             return "CHECKPOINT_CURRENT_STEP_SNAPSHOT_INVALID"
-        if result.current_step_ref_snapshot.step_ref != state.current_step_ref:
+        if current_go_snapshot is None:
+            return "CHECKPOINT_CURRENT_STEP_SNAPSHOT_INVALID"
+        if not _is_ephemeral_step_ref(current_go_snapshot.step_ref):
+            if result.current_step_ref_snapshot.step_ref != current_go_snapshot.step_ref:
+                return "CHECKPOINT_CURRENT_STEP_SNAPSHOT_INVALID"
+        if result.current_step_ref_snapshot.step_text.strip() != current_go_snapshot.step_text:
+            return "CHECKPOINT_CURRENT_STEP_SNAPSHOT_INVALID"
+        if result.current_step_ref_snapshot.go_marker_present != current_go_snapshot.go_marker_present:
             return "CHECKPOINT_CURRENT_STEP_SNAPSHOT_INVALID"
 
     for note in result.note_signals:
@@ -274,9 +291,20 @@ def persist_checkpoint_runtime(input_data: CheckpointRuntimeInput) -> dict[str, 
             "Checkpoint phase spec could not be loaded.",
         )
 
-    invalid_reason = _validate_checkpoint_result(result, state, phase_spec)
+    current_go_snapshot = None
+    if result.phase in {CurrentPhase.STEP, CurrentPhase.IMPLEMENTATION}:
+        try:
+            current_go_snapshot, marker_reason = resolve_current_go_snapshot(task_paths.task_root)
+        except OSError:
+            current_go_snapshot, marker_reason = None, "CHECKPOINT_CURRENT_STEP_REF_MISSING"
+        if marker_reason is not None:
+            return _blocked_checkpoint_output(marker_reason)
+
+    invalid_reason = _validate_checkpoint_result(result, state, phase_spec, current_go_snapshot)
     if invalid_reason is not None:
         return _blocked_checkpoint_output(invalid_reason)
+    if current_go_snapshot is not None:
+        result.current_step_ref_snapshot = current_go_snapshot
 
     checkpoint_path = reserve_log_path(task_paths.logs_dir, "checkpoints")
     checkpoint_ref = log_ref_for_path(task_paths.logs_dir, checkpoint_path)
