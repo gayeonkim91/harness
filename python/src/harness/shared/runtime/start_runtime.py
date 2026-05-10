@@ -9,7 +9,11 @@ from typing import Any
 from harness.shared.contracts.profile import ReadTargetKind, RepoProfile, SelectorType, TypedReadEntry
 from harness.shared.contracts.state import CurrentPhase, HarnessCounters, HarnessState, SessionState, WorkflowMode
 from harness.shared.contracts.workflow import WorkflowKind
-from harness.shared.artifacts.plan_artifact import render_initial_verification_contract, scaffold_plan_with_verification
+from harness.shared.artifacts.plan_artifact import (
+    render_initial_verification_contract,
+    scaffold_plan_with_verification,
+    verification_template_from_toolchain,
+)
 from harness.shared.artifacts.state_artifact import write_initial_state
 from harness.shared.core.guard_executor import GuardInput, run_guard
 from harness.shared.core.phase_spec_loader import PhaseSpecLoadError, resolve_workspace_root
@@ -210,15 +214,26 @@ def execute_start_runtime(input_data: StartRuntimeInput) -> dict[str, object]:
         task_paths.task_root.mkdir(parents=True, exist_ok=True)
         verification_template = None
         gate_source = "generic fallback"
-        if guard_decision.repo_profile is not None and input_data.adoption_kind is not None:
-            verification_template = guard_decision.repo_profile.verification_gate_templates.get(input_data.adoption_kind)
-            if verification_template is not None:
-                gate_source = "repo_profile.verification_gate_templates"
+        verification_toolchain = None
+        if guard_decision.repo_profile is not None:
+            profile = guard_decision.repo_profile
+            if (
+                profile.verification_toolchain is not None
+                and profile.verification_toolchain.configured
+            ):
+                verification_toolchain = profile.verification_toolchain
+                verification_template = verification_template_from_toolchain(verification_toolchain)
+                gate_source = "repo_profile.verification_toolchain"
+            elif input_data.adoption_kind is not None:
+                verification_template = profile.verification_gate_templates.get(input_data.adoption_kind)
+                if verification_template is not None:
+                    gate_source = "repo_profile.verification_gate_templates"
         verification_contract = render_initial_verification_contract(
             adoption_kind=input_data.adoption_kind,
             task_classification=input_data.task_classification,
             template=verification_template,
             gate_source=gate_source,
+            toolchain=verification_toolchain,
         )
         plan_path = scaffold_plan_with_verification(task_paths.task_root, input_data.task_name, verification_contract)
         task_paths.logs_dir.mkdir(parents=True, exist_ok=True)

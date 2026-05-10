@@ -6,6 +6,8 @@ verification.md 작성 메모
 - 시나리오는 최대 5개까지만 기록한다.
 - 시나리오당 `실행 / 결과 / 관찰 / 판정 영향` 4줄 형식을 유지한다.
 - 테스트 로그 원문, stack trace 전문, 콘솔 출력 복붙은 금지한다.
+- test/lint/build 결과를 요약하면 `test-report skill` 사용 여부를 기록한다.
+- 선행 gate 실패로 테스트 report가 없으면 `테스트 미실행`을 명시한다.
 - 필요한 경우 산출물 경로나 보고서 위치만 적는다.
 -->
 
@@ -21,18 +23,21 @@ verification.md 작성 메모
   - 명령 또는 검사명:
   - 작업 디렉터리:
   - 결과:
+  - test-report skill:
   - 근거 artifact:
   - 판정 영향:
 - 게이트 2:
   - 명령 또는 검사명:
   - 작업 디렉터리:
   - 결과:
+  - test-report skill:
   - 근거 artifact:
   - 판정 영향:
 - 게이트 3:
   - 명령 또는 검사명:
   - 작업 디렉터리:
   - 결과:
+  - test-report skill:
   - 근거 artifact:
   - 판정 영향:
 

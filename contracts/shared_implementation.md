@@ -112,6 +112,7 @@ tool-specific 차이를 제외한 `/wf-*` semantic contract, artifact ownership,
 - `workflow_mode`의 허용 값은 `guided | generic`이다
 - `current_phase`의 허용 값은 `pre-planning | plan | step | implementation | verification | review`다
 - `repo_profile_ref`는 task-level로 pin된 repo onboarding profile ref다
+- repo onboarding profile은 repo 최초 세팅 시 선택한 `verification_toolchain`을 담을 수 있다. 이 값이 configured이면 `/wf-start`가 task-local Verification 초기 계약에 우선 반영한다
 - `workflow_mode=guided`이면 `repo_profile_ref`는 non-null이어야 하고, `generic`이면 `null`이어야 한다
 - `workspace_baseline_ref`는 `/wf-start`가 캡처한 task-local workspace baseline artifact ref다
 - `workspace_baseline_ref`는 task lifetime 동안 바뀌지 않으며, task-scoped diff/fingerprint 계산의 canonical base다
@@ -382,7 +383,8 @@ guard 해석 원칙:
 **초기 verification gate 계약**
 - `/wf-start`는 최초 initialization 1회에 한해 `plan.md`의 `Verification` section에 task-local verification gate contract를 scaffold한다
 - 이후 `/wf-start` 재실행은 guard가 차단하므로 기존 verification gate contract를 덮어쓰지 않는다
-- guided mode에서는 resolved `adoption_kind`와 `task_classification`을 기록하고, active repo profile의 `verification_gate_templates[adoption_kind]`가 있으면 이를 초기값으로 사용한다
+- guided mode의 active repo profile에 `verification_toolchain.configured=true`가 있으면 `/wf-start`는 해당 repo-level build/test/gate toolchain을 초기 gate source로 사용한다
+- toolchain이 configured가 아니면 guided mode에서는 resolved `adoption_kind`와 `task_classification`을 기록하고, active repo profile의 `verification_gate_templates[adoption_kind]`가 있으면 이를 초기값으로 사용한다
 - profile template이 없거나 generic mode이면 shared fallback template을 사용하되, 특정 테스트/린트/빌드 명령을 고정하지 않고 `<define before verification>` placeholder를 남긴다
 - 초기 contract는 baseline일 뿐이며, 작업 중 새 위험이나 범위 변경이 발견되면 plan/checkpoint/apply flow를 통해 검증 게이트를 추가하거나 수정할 수 있다
 - `/wf-verify`는 항상 최신 `plan.md`의 `Verification` contract를 canonical input으로 사용한다
@@ -542,8 +544,10 @@ guard 해석 원칙:
   - `stop_condition_code`
   - `primary_cause_code`
   - `reason_fingerprint`
+  - `lint_warnings`
 - `judgement_code`의 허용 집합은 verification phase 문서의 허용 판정 집합을 따른다
 - `note_signals` shape은 `/wf-checkpoint`와 같지만 `note_target_hint=plan`만 허용한다
+- `note_signals[*].note_text`는 항상 non-empty text여야 하며 whitespace-only 값은 허용하지 않는다
 - `judgement_code != GO_WITH_NOTE`이면 `note_signals=[]`다
 - `judgement_code = GO_WITH_NOTE`이면 `note_signals`는 1개 이상이어야 한다
 - `judgement_code`가 `REWORK | REWRITE_STEP | REWRITE_PLAN | ROLLBACK | HOLD`면 `primary_cause_code`는 필수다
@@ -553,6 +557,8 @@ guard 해석 원칙:
 - `judgement_code`가 `GO | GO_WITH_NOTE`면 `reason_fingerprint=null`이어도 된다
 - `verified_task_diff_fingerprint`는 verification 종료 시점의 task-scoped diff fingerprint다
 - `verified_task_diff_fingerprint`는 항상 필드로 존재하며 non-null이어야 한다
+- `lint_warnings`는 차단하지 않는 PR8 verification lint 결과다. 공식 inventory는 `contracts/results.py`의 `VerificationLintWarningCode`가 정본이다
+- shared reader/writer는 공식 inventory 밖의 `lint_warnings` 값을 보존하지 않고 drop한다
 - `current_step_ref_snapshot`은 `/wf-verify` result contract에 포함하지 않는다
 - `/wf-next`는 `/wf-verify` result에서 최소 `judgement_code`, `note_signals`, `stop_condition_code`, `reason_fingerprint`, `basis_refs`를 소비할 수 있어야 한다
 
@@ -575,6 +581,9 @@ guard 해석 원칙:
 - `judgement_code`의 허용 집합은 `DONE | DONE_WITH_NOTE | REWORK | REWRITE_PLAN | HOLD`다
 - `out_of_scope_change=yes`면 `judgement_code=DONE | DONE_WITH_NOTE`를 사용할 수 없다
 - `judgement_code=DONE_WITH_NOTE`면 `carry_forward_notes`는 1개 이상이어야 한다
+- `DONE_WITH_NOTE`의 `carry_forward_notes[*]`는 non-empty text여야 하며 whitespace-only 값은 허용하지 않는다
+- `judgement_code`가 `REWORK | REWRITE_PLAN | HOLD`면 `key_issues`는 1개 이상이어야 하고 각 항목은 non-empty text여야 한다
+- `verification_blind_spots[*]`는 user-facing review text이므로 present하면 non-empty text여야 한다
 - `judgement_code`가 `REWORK | REWRITE_PLAN | HOLD`면 `primary_cause_code`는 필수다
 - `judgement_code`가 `REWORK | REWRITE_PLAN | HOLD`면 `reason_fingerprint`는 필수다
 - `reason_fingerprint`는 위 `stop-condition evidence model`의 canonical format을 따른다
@@ -796,6 +805,8 @@ null 규칙:
 
 입력 원칙:
 - optional hint는 탐색 보조일 뿐 source of truth가 아니다
+- `candidate_basis_refs`는 lint warning 억제 근거가 될 수 없다. test-report verification assist marker는 persisted `VerificationResult.basis_refs` 또는 item `basis_refs`에 있어야 한다
+- runtime input의 `candidate_basis_refs` field는 CLI/input compatibility를 위해 허용하지만 verification result artifact에 persist하지 않으며 lint suppression에도 쓰지 않는다
 - 최종 판정과 verification summary는 실제 실행 결과, phase 문서, repo profile, plan의 `Verification` section을 다시 읽어 내려야 한다
 
 **Precondition / Guard**
@@ -828,12 +839,24 @@ null 규칙:
 실행 환경 원칙:
 - shared harness는 테스트, 린트, 빌드, 정적 분석 명령을 고정하지 않는다
 - 각 verification command/check는 repo profile 또는 plan이 지정한 working directory와 환경 전제를 따른다
+- PR8 gate selector는 변경 path를 `java_spring | frontend | mixed | docs_only` 영향 범위로 분류하고 check-only gate를 추천한다. selector 출력은 추천이며, 실제 실행 계약은 최신 `plan.md`의 `Verification` section이 우선한다
+- `doc/`, `docs/`, `documentation/` 아래의 `.md`, `.mdx`, `.rst`, `.adoc`, `.txt`는 docs context로 본다
+- source/test resource 아래의 문서형 fixture(`src/main/resources/*.mdx`, `src/test/resources/docs/*.md`, `tests/resources/*.md` 등)는 docs-only가 아니라 mixed 영향 범위로 본다
+- frontend MDX는 `app/`, `components/`, `pages/`, `routes/` 같은 frontend source dir 또는 frontend context path 안에 있을 때 frontend 영향으로 본다
+- Java/Spring gate 결과는 가능하면 `core/gradle_result_inspector.py`가 `build/test-results`, `build/reports/tests`를 먼저 읽어 집계한다. `spotlessCheck`, `spotlessJavaCheck`, `spotlessKotlinCheck`, `checkstyle` 같은 선행 gate 실패는 테스트 실패와 분리해서 기록한다
+- `spotless*Check` 같은 선행 gate 실패로 테스트 report가 없으면 `verification.md`에는 `테스트 미실행`을 명시한다
+- test/lint/build/static-analysis 결과 요약은 가능하면 `integrations/test_report_skill_bridge.py` payload로 `skills/test-report` verification assist mode를 거친다. verification result에는 `skill:test-report#verification-assist` marker가 필요하며, standalone marker는 verification assist 근거로 인정하지 않는다. 미경유 결과는 `VERIFY_TEST_REPORT_SKILL_BYPASSED` lint warning으로 남긴다
+- `VERIFY_TEST_REPORT_SKILL_BYPASSED` 후보 도구 inventory의 구현 정본은 `runtime/verify_runtime.py`의 `_TEST_REPORT_CANDIDATE_PATTERN`이다. 대표 카테고리는 test(`test`, `pytest`, `junit`, `mvn`, `surefire`, `failsafe`, `jest`, `vitest`), lint(`lint`, `ruff`, `eslint`, `checkstyle`), build(`build`, `gradle`), static-analysis(`mypy`, `pyright`, `tsc --noEmit`, `typecheck`)다
+- `/wf-verify`는 `spotlessApply`, `pnpm format` 같은 formatter/apply command를 자동 실행하지 않는다. 필요한 경우 사용자가 직접 실행할 조치로 안내하고, verification gate는 `spotlessCheck`, `pnpm format:check` 같은 check-only command를 사용한다
 - verification은 repo profile의 자동 정리 단계 후, 필수 검증 게이트를 정의된 순서대로 실행한다
 - plan의 `Verification` section에 있는 추가 검증은 필수 게이트 뒤에 실행한다
 
 **verification item 실행 규칙**
 - `/wf-verify`는 가능한 한 독립적인 verification item을 끝까지 시도해 근거를 최대한 수집한다
 - 다만 선행 실패 때문에 의미 있는 실행이 불가능한 item은 생략하지 않고 `NOT_RUN`으로 기록한다
+- 검증 결과 요약은 긴 콘솔 원문 대신 실행 명령, 종료 상태, 집계, 실패 목록, 대표 원인, 근거 artifact 경로를 우선 근거로 삼는다
+- `verification.md`나 verification result summary에 콘솔 stack trace 전문을 직접 붙이면 `VERIFY_CONSOLE_STACK_TRACE_BLOCKED`로 차단한다. stack trace는 report/log artifact ref로만 남기고 본문에는 대표 원인만 요약한다
+- Java `Caused by:` 한 줄 요약은 stack frame이 동반될 때만 stack trace 원문으로 본다
 - 모든 verification item은 최소 다음 필드를 가진다:
   - `item_key`
   - `item_type` (`cleanup | gate | extra`)
@@ -861,6 +884,7 @@ null 규칙:
 - verification result/log 생성은 shared writer가 담당한다
 - shared writer는 verification 종료 시점의 task-scoped diff fingerprint를 계산해 `verified_task_diff_fingerprint`에 기록한다
 - `state.json.latest_verification_ref` 갱신은 shared writer가 담당한다
+- verification result가 result contract로 정규화되지 않거나 contract validation에 실패하면 `reason_code=VERIFY_RESULT_CONTRACT_INVALID` 또는 해당 validation reason의 structured blocked output을 반환하고 verification result artifact/state mutation은 만들지 않는다
 - verification result log가 기록된 뒤 `state.json.latest_verification_ref` 갱신에 실패하면 `reason_code=VERIFY_STATE_UPDATE_FAILED`로 차단한다
 - 이 경우 verification log는 persisted 상태이며, `latest_verification_ref`는 갱신되지 않은 상태로 남는다
 - shared writer는 `logs/verify-recovery/*.json`에 `record_type=verify_state_update_recovery`, `status=unresolved`, `orphan_result_ref`, `attempted_pointer_field=latest_verification_ref`를 포함한 recovery record를 남긴다
@@ -872,29 +896,41 @@ null 규칙:
 - `/wf-verify`는 `session_state`, `current_phase`, `pending_approval_for`, `review_outcome`, `closure_authorized`를 직접 수정하지 않는다
 - `/wf-verify`는 `plan.md`, legacy `steps.md`, `state.json`, `logs/`를 직접 수정하지 않는다
   - 단, repo profile 자동 정리 단계의 workspace 변경은 verification execution으로 허용된다
-- verify blocked output은 `reason_code`와 함께 operator-facing `message_summary`를 포함한다
+- verify blocked output은 result artifact가 아니며, `reason_code`와 함께 operator-facing `message_summary`를 포함한다
 
 현재 `/wf-verify` reason code inventory:
-- `VERIFY_WORKSPACE_ROOT_MISSING`
-- `STATE_ARTIFACT_MISSING`
-- `STATE_ARTIFACT_INVALID`
-- `VERIFY_GUARD_BLOCKED`
-- `VERIFY_PHASE_MISMATCH`
-- `VERIFY_SESSION_STATE_INVALID`
-- `VERIFY_PENDING_APPROVAL_INVALID`
-- `VERIFY_CURRENT_STEP_REF_INVALID`
-- `VERIFY_WORKSPACE_BASELINE_MISSING`
-- `PLAN_ARTIFACT_MISSING`
-- `VERIFY_BASIS_REF_MISSING`
-- `VERIFY_PHASE_SPEC_UNAVAILABLE`
-- `VERIFY_RESULT_CONTRACT_INVALID`
-- `VERIFY_JUDGEMENT_INVALID`
-- `VERIFY_NOTE_SIGNALS_INVALID`
-- `VERIFY_NOTE_TARGET_INVALID_FOR_PHASE`
-- `VERIFY_REASON_REQUIRED`
-- `VERIFY_ITEM_INVALID`
-- `VERIFY_DIFF_UNAVAILABLE`
-- `VERIFY_STATE_UPDATE_FAILED`
+- Guard / state / precondition:
+  - `VERIFY_WORKSPACE_ROOT_MISSING`
+  - `STATE_ARTIFACT_MISSING`
+  - `STATE_ARTIFACT_INVALID`
+  - `VERIFY_GUARD_BLOCKED`
+  - `VERIFY_PHASE_MISMATCH`
+  - `VERIFY_SESSION_STATE_INVALID`
+  - `VERIFY_PENDING_APPROVAL_INVALID`
+  - `VERIFY_CURRENT_STEP_REF_INVALID`
+  - `VERIFY_WORKSPACE_BASELINE_MISSING`
+  - `PLAN_ARTIFACT_MISSING`
+  - `VERIFY_BASIS_REF_MISSING`
+- Runtime dependency:
+  - `VERIFY_PHASE_SPEC_UNAVAILABLE`
+  - `VERIFY_DIFF_UNAVAILABLE`
+- Result normalization:
+  - `VERIFY_RESULT_CONTRACT_INVALID`
+- Result semantic validation:
+  - `VERIFY_JUDGEMENT_INVALID`
+  - `VERIFY_NOTE_SIGNALS_INVALID`
+  - `VERIFY_NOTE_TARGET_INVALID_FOR_PHASE`
+  - `VERIFY_REASON_REQUIRED`
+  - `VERIFY_ITEM_INVALID`
+- Verification content lint block:
+  - `VERIFY_CONSOLE_STACK_TRACE_BLOCKED`
+  - `VERIFY_VERIFICATION_DOC_UNREADABLE`
+- Persistence / state update:
+  - `VERIFY_STATE_UPDATE_FAILED`
+
+현재 `/wf-verify` lint warning inventory:
+- `VERIFY_TEST_REPORT_SKILL_BYPASSED`
+- `VERIFY_AUTOFIX_COMMAND_RECORDED`
 
 **후속 handoff**
 - `/wf-next(source=verify)`는 `latest_verification_ref`가 가리키는 verification result를 읽는다
@@ -923,6 +959,7 @@ null 규칙:
 
 입력 원칙:
 - optional hint는 탐색 보조일 뿐 source of truth가 아니다
+- runtime input의 `candidate_basis_refs` field는 CLI/input compatibility를 위해 허용하지만 review result artifact에 persist하지 않는다
 - `/wf-review`는 메인 workflow의 변호성 설명이나 implementation reasoning을 정본 입력으로 받지 않는다
 - 초기 shared contract는 단일 `final-review` profile만 가정하며, profile 선택 입력은 두지 않는다
 
@@ -978,10 +1015,11 @@ null 규칙:
 - reviewer는 read-only 판정 주체이며, review execution은 workspace/artifact 수정 단계로 취급하지 않는다
 - rerun review가 필요하면 이전 review result를 재사용하지 않고, 현재 task-scoped diff와 최신 verification 결과로 packet을 다시 조립한다
 - adapter가 반환한 reviewer output이 result contract validation에 실패하면 shared review sink는 review result artifact를 기록하지 않는다
-- reviewer output validation 실패는 `logs/review-failures/*.json` failure record를 남기고, `state.json.session_state=paused`, `state.json.current_phase=review`, `state.json.current_step_ref=null`, `state.json.pending_approval_for=null`, `state.json.blocked_transition=review_execution`, `state.json.blocked_reason_ref=<failure record ref>`를 반영한다
-- review failure record는 최소 `record_type=review_failure`, `status=blocked`, `occurred_at`, `reason_code`, `review_output`을 가진다
+- reviewer output이 result contract로 정규화되지 않거나 validation에 실패하면 `logs/review-failures/*.json` failure record를 남기고, `state.json.session_state=paused`, `state.json.current_phase=review`, `state.json.current_step_ref=null`, `state.json.pending_approval_for=null`, `state.json.blocked_transition=review_execution`, `state.json.blocked_reason_ref=<failure record ref>`를 반영한다
+- review failure record는 JSON object이며 최소 `record_type=review_failure`, `status=blocked`, `occurred_at`, `reason_code`, `review_output`을 가진다. `review_output`은 정규화 실패 시 raw reviewer payload이고, validation 실패 시 normalized review output이다
 - guard, verification freshness, diff 생성 실패는 review result/failure record와 state mutation 없이 blocked output만 반환한다
 - 이 blocked path에서는 `latest_review_ref`를 갱신하지 않는다
+- 의도적 비대칭: `/wf-verify`는 malformed verification result에 대해 artifact/state mutation 없는 fast-fail blocked output을 반환하고, `/wf-review`는 독립 reviewer output 감사 추적을 위해 failure artifact와 paused state를 남긴다
 
 **평가 규칙**
 - review phase 문서의 `Checkpoint > 확인 항목`, `Checkpoint > 판정`, `판정 기준 메모`를 기준으로 판정을 고른다
@@ -1008,7 +1046,8 @@ null 규칙:
 - `/wf-review`는 `session_state`, `current_phase`, `pending_approval_for`, `review_outcome`, `closure_authorized`를 직접 수정하지 않는다
 - `/wf-review`는 `plan.md`, legacy `steps.md`, `state.json`, `logs/`를 직접 수정하지 않는다
 - reviewer output validation 실패 시 shared state writer는 blocked state mutation을 반영한다
-- review blocked output은 `reason_code`와 함께 operator-facing `message_summary`를 포함한다
+- review blocked output은 result artifact가 아니며, `reason_code`와 함께 operator-facing `message_summary`를 포함한다
+- reviewer output 정규화/validation 실패 path의 review blocked output은 `review_failure_ref`를 함께 포함한다
 
 **후속 handoff**
 - `/wf-next(source=review)`는 `latest_review_ref`가 가리키는 review result를 읽는다
@@ -1018,28 +1057,34 @@ null 규칙:
 - reviewer output validation 실패로 blocked된 경로에서는 메인 workflow가 `/wf-next(source=review)`를 호출하지 않고 blocked output을 사용자에게 노출한다
 
 현재 `/wf-review` reason code inventory:
-- `REVIEW_WORKSPACE_ROOT_MISSING`
-- `STATE_ARTIFACT_MISSING`
-- `STATE_ARTIFACT_INVALID`
-- `REVIEW_GUARD_BLOCKED`
-- `REVIEW_PHASE_MISMATCH`
-- `REVIEW_SESSION_STATE_INVALID`
-- `REVIEW_PENDING_APPROVAL_INVALID`
-- `REVIEW_CURRENT_STEP_REF_INVALID`
-- `REVIEW_WORKSPACE_BASELINE_MISSING`
-- `PLAN_ARTIFACT_MISSING`
-- `REVIEW_VERIFICATION_REF_MISSING`
-- `REVIEW_VERIFICATION_REF_UNREADABLE`
-- `REVIEW_VERIFICATION_STALE`
-- `REVIEW_DIFF_UNAVAILABLE`
-- `REVIEW_PHASE_SPEC_UNAVAILABLE`
-- `REVIEW_RESULT_CONTRACT_INVALID`
-- `REVIEW_JUDGEMENT_INVALID`
-- `REVIEW_OUT_OF_SCOPE_INVALID`
-- `REVIEW_CARRY_FORWARD_NOTES_INVALID`
-- `REVIEW_KEY_ISSUES_REQUIRED`
-- `REVIEW_REASON_REQUIRED`
-- `REVIEW_STATE_UPDATE_FAILED`
+- Guard / state / precondition:
+  - `REVIEW_WORKSPACE_ROOT_MISSING`
+  - `STATE_ARTIFACT_MISSING`
+  - `STATE_ARTIFACT_INVALID`
+  - `REVIEW_GUARD_BLOCKED`
+  - `REVIEW_PHASE_MISMATCH`
+  - `REVIEW_SESSION_STATE_INVALID`
+  - `REVIEW_PENDING_APPROVAL_INVALID`
+  - `REVIEW_CURRENT_STEP_REF_INVALID`
+  - `REVIEW_WORKSPACE_BASELINE_MISSING`
+  - `PLAN_ARTIFACT_MISSING`
+  - `REVIEW_VERIFICATION_REF_MISSING`
+  - `REVIEW_VERIFICATION_REF_UNREADABLE`
+  - `REVIEW_VERIFICATION_STALE`
+- Runtime dependency:
+  - `REVIEW_DIFF_UNAVAILABLE`
+  - `REVIEW_PHASE_SPEC_UNAVAILABLE`
+- Result normalization:
+  - `REVIEW_RESULT_CONTRACT_INVALID`
+- Result semantic validation:
+  - `REVIEW_JUDGEMENT_INVALID`
+  - `REVIEW_OUT_OF_SCOPE_INVALID`
+  - `REVIEW_CARRY_FORWARD_NOTES_INVALID`
+  - `REVIEW_KEY_ISSUES_REQUIRED`
+  - `REVIEW_VERIFICATION_BLIND_SPOTS_INVALID`
+  - `REVIEW_REASON_REQUIRED`
+- Persistence / state update:
+  - `REVIEW_STATE_UPDATE_FAILED`
 
 **하지 않는 것**
 - user approval 처리

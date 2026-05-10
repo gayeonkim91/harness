@@ -36,9 +36,15 @@ phase_spec:
 ## 해야 할 일
 - 같은 task 폴더에 `verification.md`가 없으면 `templates/task/verification.md`를 기준으로 생성한다.
 - plan의 `Verification` 계약과 repo profile이 정의한 자동 정리 단계와 검증 게이트를 순서대로 실행한다.
+- repo 최초 세팅에서 `verification_toolchain`이 정해졌다면 `/wf-start`가 이를 `plan.md`의 `Verification` 초기 계약에 반영한다. `/wf-verify`는 이 결과로 만들어진 최신 task-local 계약을 따른다.
 - shared harness는 테스트, 린트, 빌드, 정적 분석 명령을 고정하지 않는다. 각 검증 게이트의 명령, 작업 디렉터리, 환경 전제는 repo profile 또는 plan이 제공한 값을 따른다.
-- 검증 결과 정리가 필요한 경우 repo별 보조 skill이나 `skills/test-report/SKILL.md`를 사용할 수 있지만, 보조 skill은 이미 실행된 검증 결과를 요약하는 용도이며 검증 게이트 자체를 대체하지 않는다.
+- 변경 path 기준 gate 추천이 필요하면 PR8 selector(`core/verification_gate_selector.py`)의 `java_spring | frontend | mixed | docs_only` 분류를 사용하되, 최신 `plan.md`의 `Verification` 계약을 우선한다.
+- Java/Spring 검증은 가능하면 Gradle report 산출물(`build/test-results`, `build/reports/tests`)을 먼저 읽고, `spotlessCheck` / `checkstyle` 선행 gate 실패는 테스트 실패와 분리해서 기록한다.
+- `spotlessCheck` 같은 선행 gate 실패로 테스트를 실행하지 못했으면 `verification.md`에 `테스트 미실행`을 명시한다.
+- 검증 결과 정리가 필요한 경우 repo별 보조 skill이나 `skills/test-report/SKILL.md` verification assist mode를 사용한다. 보조 skill은 이미 실행된 검증 결과를 요약하는 용도이며 검증 게이트 자체를 대체하지 않는다.
 - 검증 결과 요약은 긴 콘솔 원문 대신 실행 명령, 종료 상태, 집계, 실패 목록, 대표 원인, 근거 artifact 경로를 우선 근거로 삼는다.
+- 테스트, 린트, 빌드, 정적 분석 결과를 test-report skill 없이 직접 요약하면 runtime lint warning 대상이다.
+- `spotlessApply`, `pnpm format` 같은 자동 수정 command는 `/wf-verify`에서 자동 실행하지 않는다. 필요한 경우 수동 조치로 안내하고, gate는 `spotlessCheck`, `pnpm format:check` 같은 check-only command를 사용한다.
 - `plan.md`의 `Verification`에 정의된 검증 계약을 기준으로 작업별 검증을 수행한다.
 - 작업 특성상 추가 검증이 필요하면 실행하고, 결과를 정리한다.
     - 수동 검증
@@ -75,6 +81,7 @@ phase_spec:
 - 실패 상태를 GO처럼 보고하지 않는다.
 - 이 단계에서 새 기능이나 새 구조 변경을 추가하지 않는다.
 - 테스트, 린트, 빌드, 정적 분석 콘솔 로그 원문을 그대로 `verification.md`에 복붙하지 않는다.
+- 콘솔 stack trace 전문을 `verification.md`나 verification result summary에 직접 복붙하지 않는다. 대표 원인과 report/log artifact ref만 남긴다.
 - 긴 콘솔 출력만 보고 장문 요약하지 않는다. 가능한 경우 구조화된 report, 종료 상태, 실패 목록, artifact 경로를 근거로 삼는다.
 - shared harness 문서에 특정 언어, 빌드 도구, 테스트 프레임워크 명령을 새 기본값으로 추가하지 않는다.
 

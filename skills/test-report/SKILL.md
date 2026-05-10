@@ -86,6 +86,7 @@ description: Summarize test, lint, build, or static-analysis results either as a
 - 실패/스킵의 핵심 묶음이 무엇인가
 - 현재 task와의 관련성이 무엇인가
 - 이 결과가 verification 판정에 어떤 영향을 주는가
+- 하네스 verification bridge로 호출된 경우 근거 marker `skill:test-report#verification-assist`를 verification result `basis_refs`에 포함할 수 있게 출력에 명시한다
 
 ## standalone mode 출력 형식
 
@@ -110,6 +111,7 @@ description: Summarize test, lint, build, or static-analysis results either as a
 5. task 관련성
 6. 판정 영향
 7. `verification.md` 반영용 요약
+8. 하네스 bridge basis marker (해당 시)
 
 ## 실패 분류 기준
 

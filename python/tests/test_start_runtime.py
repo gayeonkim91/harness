@@ -410,6 +410,97 @@ verification_gate_templates:
     assert "check: inspect generated entry point" in plan
 
 
+def test_execute_start_runtime_prefers_configured_verification_toolchain(tmp_path: Path) -> None:
+    workspace_root = tmp_path / "workspace"
+    task_root = tmp_path / "task"
+    profile_path = workspace_root / "contracts" / "repo_profile.md"
+    profile_path.parent.mkdir(parents=True)
+    profile_path.write_text(
+        """# Test Profile
+
+```yaml
+profile_id: toolchain-profile
+profile_version: 1
+project_context:
+  adoption_kind_source:
+    kind: explicit_initialization_input
+    resolution_order:
+      - explicit initialization input
+  adoption_kind_allowed:
+    - legacy-medium
+  initialization_requirements:
+    legacy-medium:
+      doc_rules: []
+verification_toolchain:
+  configured: true
+  build_tool: maven
+  test_tool: maven-surefire
+  working_directory: .
+  required_gates:
+    - name: Maven test
+      command: ./mvnw test
+      working_directory: .
+      success_criteria: Maven exits 0
+      evidence: surefire report or command summary
+  conditional_gates:
+    - condition: public API changed
+      gate: run API scenario check
+  manual_checks:
+    - check: compare Spring endpoint behavior
+      evidence: reviewed endpoint scenario notes
+  notes:
+    - Maven is the repo-level build driver.
+guided_classifications:
+  simple_local:
+    token: simple_local
+    default_initial_phase_hint: plan
+    minimum_read_set_default: []
+    minimum_read_set_extensions: []
+known_issue_selector_mapping: []
+checkpoint_supplements: {}
+verification_gate_templates:
+  legacy-medium:
+    required_gates:
+      - name: Template gate that should not be used
+        command: ./gradlew test
+        working_directory: .
+        success_criteria: gradle exits 0
+        evidence: gradle summary
+```
+""",
+        encoding="utf-8",
+    )
+
+    result = execute_start_runtime(
+        StartRuntimeInput(
+            task_root=task_root,
+            task_name="toolchain-verification-contract",
+            workflow_mode="generic",
+            repo_profile_ref=None,
+            explicit_repo_profile_ref="contracts/repo_profile.md",
+            task_classification="simple_local",
+            initial_phase="plan",
+            minimum_read_set=[],
+            phase_doc_ref="phases/plan.md",
+            user_request="toolchain 검증 계약 생성",
+            adoption_kind="legacy-medium",
+            workflow_kind="runbook",
+            workspace_root=workspace_root,
+            workflow_mode_resolved=True,
+        )
+    )
+
+    plan = (task_root / "plan.md").read_text(encoding="utf-8")
+    assert result["reason_code"] is None
+    assert "gate_source: repo_profile.verification_toolchain" in plan
+    assert "- Toolchain Policy:" in plan
+    assert "build_tool: maven" in plan
+    assert "test_tool: maven-surefire" in plan
+    assert "name: Maven test" in plan
+    assert "command: ./mvnw test" in plan
+    assert "Template gate that should not be used" not in plan
+
+
 def test_runtime_cli_rejects_invalid_minimum_read_set(monkeypatch, capsys, tmp_path: Path) -> None:
     payload = {
         "task_root": str(tmp_path / "cli-invalid"),

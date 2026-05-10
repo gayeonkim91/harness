@@ -12,6 +12,7 @@
 - 도입 유형 입력 surface
 - 도입 유형별 guided classification inventory
 - classification별 `minimum_read_set_default` / `minimum_read_set_extensions`
+- repo 최초 세팅 시 선택한 build/test/static/format-check toolchain
 - 도입 유형별 초기 verification gate template
 - direct symptom 기반 `known_issue_selector_mapping`
 - repo-specific implementation exit doc-sync supplement
@@ -25,15 +26,17 @@
 
 shared core는 이 문서를 free-form 설명문이 아니라, 단일 top-level schema object를 가진 profile instance로 소비한다.
 
-top-level required fields:
+top-level fields:
 - `profile_id`
 - `profile_version`
-- `provenance_refs`
-- `project_context`
-- `guided_classifications`
-- `verification_gate_templates`
-- `known_issue_selector_mapping`
-- `checkpoint_supplements`
+- `provenance_refs` (optional, default `[]`)
+- `project_context` (optional for generic profiles)
+- `guided_classifications` (optional, default `{}`)
+- `verification_toolchain` (optional but recommended; default unset)
+- `verification_gate_templates` (optional, default `{}`)
+- `known_issue_selector_mapping` (optional, default `[]`)
+- `checkpoint_supplements` (optional, default `{}`)
+- Optional mapping/list fields may be omitted to use their defaults, but explicit YAML `null` is invalid and must fail profile load as `RepoProfileLoadError`.
 
 identity contract:
 - `repo_profile_ref`는 task state에 pin되는 external locator/path다
@@ -44,6 +47,8 @@ identity contract:
 typed read-entry contract:
 - `minimum_read_set_default[*]`, `minimum_read_set_extensions[*]`, `known_issue_selector_mapping[*]`, `checkpoint_supplements[*].reads[*]`는 모두 최소 `doc_path`, `section_selector`, `why`를 가진다
 - schema-driven consumption에서는 위 최소 field 외에 `read_target_kind`, `selector_type`를 함께 가진다
+- `doc_path`, `why`, `read_target_kind`, `selector_type`는 non-empty string이어야 한다
+- `section_selector`는 non-empty string 또는 non-empty string list여야 한다. YAML `null`, 숫자, list 내부 non-string 값은 허용하지 않는다
 - `read_target_kind` 허용 값:
   - `doc_section`
   - `artifact_view`
@@ -73,18 +78,33 @@ project context contract:
 - `initialization_requirements`는 도입 유형별 required template path와 required section rule의 canonical source다. `templates/project/*` 템플릿 문서는 이 기준을 설명하는 문서지만, guard의 source of truth는 profile instance다
 
 verification gate template contract:
+- `verification_toolchain`은 repo 최초 세팅 시 선택한 build/test/static/format-check 도구와 required gate의 canonical source다
+- `verification_toolchain.configured=true`이면 `/wf-start`는 `verification_gate_templates[adoption_kind]`보다 toolchain required gates를 우선해 `plan.md`의 `Verification` 초기 계약을 만든다
+- `verification_toolchain` section이 present하면 `verification_toolchain.configured`는 필수이며 YAML boolean `true | false`여야 한다. quoted string `"true"` / `"false"`는 허용하지 않는다
+- `verification_toolchain.configured=true`이면 `build_tool`은 non-empty string, `required_gates`는 1개 이상이어야 하고, 각 required gate의 `name`, `command`, `working_directory`, `success_criteria`, `evidence`도 non-empty string이어야 한다. `working_directory`는 생략하면 `.`로 처리되지만, key가 있으면 non-empty string이어야 한다. YAML `null`이나 non-string 값은 허용하지 않는다. 이 조건을 만족하지 않으면 profile load가 실패한다
+- `verification_toolchain.conditional_gates[*].condition`, `verification_toolchain.conditional_gates[*].gate`, `verification_toolchain.manual_checks[*].check`, `verification_toolchain.manual_checks[*].evidence`도 present하면 non-empty string이어야 한다
+- `verification_toolchain.configured=false`이면 toolchain 전체를 비활성 stub으로 보며 build/test/gate/check/notes 내용을 검증하거나 사용하지 않는다
+- `verification_toolchain.configured=false`이거나 section이 없으면 기존 `verification_gate_templates[adoption_kind]` 또는 shared fallback placeholder를 사용한다
+- `verification_toolchain.build_tool`은 repo가 실제 사용하는 build/test driver를 적는다. 예: `gradle`, `maven`, `python`, `pnpm`, `custom`
+- `verification_toolchain.required_gates[*]`는 task별 최소 gate 후보이며, 특정 작업에서 과하거나 부족하면 plan/checkpoint/apply flow로 task-local `Verification` 계약을 수정한다
 - `verification_gate_templates`는 `/wf-start`가 최초 1회 `plan.md`의 `Verification` 계약을 초기화할 때 사용하는 도입 유형별 template이다
 - key는 `project_context.adoption_kind_allowed`의 token과 일치해야 한다
 - shared harness는 이 template을 실행하지 않는다. `/wf-start`는 task-local verification contract scaffold만 만들고, 실제 실행은 `/wf-verify`가 최신 `plan.md` 계약을 기준으로 수행한다
 - 각 required gate는 최소 `name`, `command`, `working_directory`, `success_criteria`, `evidence`를 가진다
+- 각 conditional gate와 manual check field도 YAML `null`이나 non-string 값을 허용하지 않는다
 - command를 아직 repo 차원에서 확정할 수 없으면 `<define before verification>` 같은 명시적 placeholder를 남긴다
 - shared profile은 특정 언어, 빌드 도구, 테스트 프레임워크 명령을 기본값으로 고정하지 않는다
+
+profile version migration:
+- `profile_version: 8`은 repo-level `verification_toolchain`을 도입하고, configured toolchain을 adoption template보다 우선한다
+- v7 profile이 `verification_toolchain: {}` 또는 `configured` 누락 형태를 쓰고 있었다면 v8에서는 `configured: false`를 명시하거나, `configured: true`와 완전한 toolchain 값을 함께 제공해야 한다
+- v8 loader는 `verification_toolchain.configured`, required gate fields, conditional gate fields, manual check fields의 YAML `null` 또는 non-string 값을 profile load failure로 처리한다
 
 ## Profile Instance
 
 ```yaml
 profile_id: workspace-default
-profile_version: 7
+profile_version: 8
 provenance_refs:
   - contracts/repo_profile.md
 project_context:
@@ -152,6 +172,25 @@ project_context:
           ignored_level_two_sections:
             - 최소 작성 기준
             - 작성 메모
+verification_toolchain:
+  configured: true
+  build_tool: python
+  test_tool: pytest
+  working_directory: .
+  required_gates:
+    - name: Python test suite
+      command: pytest python/tests
+      working_directory: .
+      success_criteria: pytest exits 0
+      evidence: pytest summary
+  conditional_gates:
+    - condition: packaging or import surface changes
+      gate: run an import/package smoke check for the touched surface
+  manual_checks:
+    - check: confirm changed workflow docs match runtime behavior
+      evidence: reviewed contracts/shared_implementation.md and relevant skill docs
+  notes:
+    - Java/Spring repos should replace this toolchain during onboarding with their actual build tool, such as gradle, maven, or a custom script.
 guided_classifications:
   simple_local:
     token: simple_local

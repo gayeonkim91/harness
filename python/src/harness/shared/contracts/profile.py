@@ -113,6 +113,20 @@ class VerificationGateTemplate:
 
 
 @dataclass(slots=True)
+class VerificationToolchain:
+    """Repo-level build/test/gate toolchain chosen during onboarding."""
+
+    configured: bool
+    build_tool: str
+    test_tool: str | None = None
+    working_directory: str = "."
+    required_gates: list[VerificationGate] = field(default_factory=list)
+    conditional_gates: list[ConditionalVerificationGate] = field(default_factory=list)
+    manual_checks: list[ManualVerificationCheck] = field(default_factory=list)
+    notes: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
 class RepoProfile:
     """Loaded repo onboarding profile."""
 
@@ -124,3 +138,4 @@ class RepoProfile:
     known_issue_selector_mapping: list[TypedReadEntry] = field(default_factory=list)
     checkpoint_supplements: dict[str, CheckpointSupplement] = field(default_factory=dict)
     verification_gate_templates: dict[str, VerificationGateTemplate] = field(default_factory=dict)
+    verification_toolchain: VerificationToolchain | None = None

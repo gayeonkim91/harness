@@ -61,8 +61,12 @@ checkpoint_supplements: {}
 def test_repo_profile_loads_initialization_requirements() -> None:
     profile = load_repo_profile(REPO_ROOT / "contracts/repo_profile.md", workspace_root=REPO_ROOT)
 
-    assert profile.profile_version == 7
+    assert profile.profile_version == 8
     assert profile.project_context is not None
+    assert profile.verification_toolchain is not None
+    assert profile.verification_toolchain.configured is True
+    assert profile.verification_toolchain.build_tool == "python"
+    assert profile.verification_toolchain.required_gates[0].command == "pytest python/tests"
     assert profile.project_context.adoption_kind_resolution_order == ["explicit initialization input"]
     legacy_large_rules = profile.project_context.initialization_requirements["legacy-large"]
     assert [rule.doc_path for rule in legacy_large_rules] == [
@@ -77,6 +81,612 @@ def test_repo_profile_loads_initialization_requirements() -> None:
     assert profile.verification_gate_templates["legacy-large"].required_gates[0].command == (
         "<repo-defined regression command>"
     )
+
+
+def test_repo_profile_rejects_configured_toolchain_without_build_tool(tmp_path: Path) -> None:
+    profile_path = _write_profile(
+        tmp_path,
+        """# Test Profile
+
+```yaml
+profile_id: test
+profile_version: 1
+verification_toolchain:
+  configured: true
+  build_tool: ""
+  required_gates:
+    - name: Tests
+      command: ./mvnw test
+      working_directory: .
+      success_criteria: exits 0
+      evidence: surefire report
+```
+""",
+    )
+
+    with pytest.raises(RepoProfileLoadError, match="build_tool"):
+        load_repo_profile(profile_path, workspace_root=tmp_path)
+
+
+def test_repo_profile_rejects_configured_toolchain_with_null_build_tool(tmp_path: Path) -> None:
+    profile_path = _write_profile(
+        tmp_path,
+        """# Test Profile
+
+```yaml
+profile_id: test
+profile_version: 1
+verification_toolchain:
+  configured: true
+  build_tool: null
+  required_gates:
+    - name: Tests
+      command: ./mvnw test
+      working_directory: .
+      success_criteria: exits 0
+      evidence: surefire report
+```
+""",
+    )
+
+    with pytest.raises(RepoProfileLoadError, match="build_tool"):
+        load_repo_profile(profile_path, workspace_root=tmp_path)
+
+
+def test_repo_profile_rejects_configured_toolchain_with_null_working_directory(tmp_path: Path) -> None:
+    profile_path = _write_profile(
+        tmp_path,
+        """# Test Profile
+
+```yaml
+profile_id: test
+profile_version: 1
+verification_toolchain:
+  configured: true
+  build_tool: maven
+  working_directory: null
+  required_gates:
+    - name: Tests
+      command: ./mvnw test
+      working_directory: .
+      success_criteria: exits 0
+      evidence: surefire report
+```
+""",
+    )
+
+    with pytest.raises(RepoProfileLoadError, match="working_directory"):
+        load_repo_profile(profile_path, workspace_root=tmp_path)
+
+
+def test_repo_profile_rejects_configured_toolchain_without_required_gates(tmp_path: Path) -> None:
+    profile_path = _write_profile(
+        tmp_path,
+        """# Test Profile
+
+```yaml
+profile_id: test
+profile_version: 1
+verification_toolchain:
+  configured: true
+  build_tool: maven
+  required_gates: []
+```
+""",
+    )
+
+    with pytest.raises(RepoProfileLoadError, match="required gate"):
+        load_repo_profile(profile_path, workspace_root=tmp_path)
+
+
+@pytest.mark.parametrize("field_name", ["name", "command", "working_directory", "success_criteria", "evidence"])
+def test_repo_profile_rejects_configured_toolchain_with_empty_required_gate_field(
+    tmp_path: Path,
+    field_name: str,
+) -> None:
+    gate = {
+        "name": "Tests",
+        "command": "./mvnw test",
+        "working_directory": ".",
+        "success_criteria": "exits 0",
+        "evidence": "surefire report",
+    }
+    gate[field_name] = '""'
+    profile_path = _write_profile(
+        tmp_path,
+        f"""# Test Profile
+
+```yaml
+profile_id: test
+profile_version: 1
+verification_toolchain:
+  configured: true
+  build_tool: maven
+  required_gates:
+    - name: {gate["name"]}
+      command: {gate["command"]}
+      working_directory: {gate["working_directory"]}
+      success_criteria: {gate["success_criteria"]}
+      evidence: {gate["evidence"]}
+```
+""",
+    )
+
+    with pytest.raises(RepoProfileLoadError, match=field_name):
+        load_repo_profile(profile_path, workspace_root=tmp_path)
+
+
+def test_repo_profile_rejects_configured_toolchain_with_null_required_gate_field(tmp_path: Path) -> None:
+    profile_path = _write_profile(
+        tmp_path,
+        """# Test Profile
+
+```yaml
+profile_id: test
+profile_version: 1
+verification_toolchain:
+  configured: true
+  build_tool: maven
+  required_gates:
+    - name: Tests
+      command: null
+      working_directory: .
+      success_criteria: exits 0
+      evidence: surefire report
+```
+""",
+    )
+
+    with pytest.raises(RepoProfileLoadError, match="command"):
+        load_repo_profile(profile_path, workspace_root=tmp_path)
+
+
+def test_repo_profile_rejects_null_verification_toolchain(tmp_path: Path) -> None:
+    profile_path = _write_profile(
+        tmp_path,
+        """# Test Profile
+
+```yaml
+profile_id: test
+profile_version: 1
+verification_toolchain: null
+```
+""",
+    )
+
+    with pytest.raises(RepoProfileLoadError, match="must be a mapping"):
+        load_repo_profile(profile_path, workspace_root=tmp_path)
+
+
+def test_repo_profile_rejects_null_project_context(tmp_path: Path) -> None:
+    profile_path = _write_profile(
+        tmp_path,
+        """# Test Profile
+
+```yaml
+profile_id: test
+profile_version: 1
+project_context: null
+```
+""",
+    )
+
+    with pytest.raises(RepoProfileLoadError, match="project_context must be a mapping"):
+        load_repo_profile(profile_path, workspace_root=tmp_path)
+
+
+def test_repo_profile_rejects_toolchain_missing_configured(tmp_path: Path) -> None:
+    profile_path = _write_profile(
+        tmp_path,
+        """# Test Profile
+
+```yaml
+profile_id: test
+profile_version: 1
+verification_toolchain:
+  build_tool: maven
+  required_gates:
+    - name: Tests
+      command: ./mvnw test
+      working_directory: .
+      success_criteria: exits 0
+      evidence: surefire report
+```
+""",
+    )
+
+    with pytest.raises(RepoProfileLoadError, match="verification_toolchain.configured"):
+        load_repo_profile(profile_path, workspace_root=tmp_path)
+
+
+@pytest.mark.parametrize(
+    "field_name",
+    ["guided_classifications", "checkpoint_supplements", "verification_gate_templates"],
+)
+def test_repo_profile_rejects_null_optional_mapping_field(tmp_path: Path, field_name: str) -> None:
+    profile_path = _write_profile(
+        tmp_path,
+        f"""# Test Profile
+
+```yaml
+profile_id: test
+profile_version: 1
+{field_name}: null
+```
+""",
+    )
+
+    with pytest.raises(RepoProfileLoadError, match=field_name):
+        load_repo_profile(profile_path, workspace_root=tmp_path)
+
+
+@pytest.mark.parametrize("entry_value", ["[]", "null"])
+def test_repo_profile_rejects_non_mapping_verification_gate_template_entry(
+    tmp_path: Path,
+    entry_value: str,
+) -> None:
+    profile_path = _write_profile(
+        tmp_path,
+        f"""# Test Profile
+
+```yaml
+profile_id: test
+profile_version: 1
+verification_gate_templates:
+  legacy-medium: {entry_value}
+```
+""",
+    )
+
+    with pytest.raises(RepoProfileLoadError, match="verification gate template must be a mapping"):
+        load_repo_profile(profile_path, workspace_root=tmp_path)
+
+
+@pytest.mark.parametrize("field_name", ["provenance_refs", "known_issue_selector_mapping"])
+def test_repo_profile_rejects_null_optional_list_field(tmp_path: Path, field_name: str) -> None:
+    profile_path = _write_profile(
+        tmp_path,
+        f"""# Test Profile
+
+```yaml
+profile_id: test
+profile_version: 1
+{field_name}: null
+```
+""",
+    )
+
+    with pytest.raises(RepoProfileLoadError, match=field_name):
+        load_repo_profile(profile_path, workspace_root=tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("profile_yaml", "match"),
+    [
+        (
+            """profile_id: 123
+profile_version: 1
+""",
+            "profile_id",
+        ),
+        (
+            """profile_id: test
+profile_version: "1"
+""",
+            "profile_version",
+        ),
+        (
+            """profile_id: test
+profile_version: 1
+provenance_refs:
+  - 123
+""",
+            "provenance_refs",
+        ),
+    ],
+)
+def test_repo_profile_rejects_lenient_top_level_coercion(
+    tmp_path: Path,
+    profile_yaml: str,
+    match: str,
+) -> None:
+    profile_path = _write_profile(
+        tmp_path,
+        f"""# Test Profile
+
+```yaml
+{profile_yaml}```
+""",
+    )
+
+    with pytest.raises(RepoProfileLoadError, match=match):
+        load_repo_profile(profile_path, workspace_root=tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("field_yaml", "match"),
+    [
+        (
+            """  adoption_kind_source:
+    kind: null
+    resolution_order:
+      - explicit initialization input
+  adoption_kind_allowed:
+    - greenfield
+  initialization_requirements:
+    greenfield:
+      doc_rules: []
+""",
+            "adoption_kind_source.kind",
+        ),
+        (
+            """  adoption_kind_source:
+    kind: explicit_initialization_input
+    resolution_order:
+      - 123
+  adoption_kind_allowed:
+    - greenfield
+  initialization_requirements:
+    greenfield:
+      doc_rules: []
+""",
+            "resolution_order",
+        ),
+        (
+            """  adoption_kind_source:
+    kind: explicit_initialization_input
+    resolution_order:
+      - explicit initialization input
+  adoption_kind_allowed:
+    - 123
+  initialization_requirements:
+    greenfield:
+      doc_rules: []
+""",
+            "adoption_kind_allowed",
+        ),
+        (
+            """  adoption_kind_source:
+    kind: explicit_initialization_input
+    resolution_order:
+      - explicit initialization input
+  adoption_kind_allowed:
+    - greenfield
+  initialization_requirements:
+    greenfield:
+      doc_rules:
+        - doc_path: templates/project/known-issue.md
+          min_level_two_sections: "3"
+""",
+            "min_level_two_sections",
+        ),
+    ],
+)
+def test_repo_profile_rejects_lenient_project_context_coercion(
+    tmp_path: Path,
+    field_yaml: str,
+    match: str,
+) -> None:
+    profile_path = _write_profile(
+        tmp_path,
+        f"""# Test Profile
+
+```yaml
+profile_id: test
+profile_version: 1
+project_context:
+{field_yaml}```
+""",
+    )
+
+    with pytest.raises(RepoProfileLoadError, match=match):
+        load_repo_profile(profile_path, workspace_root=tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("entry_yaml", "match"),
+    [
+        (
+            """read_target_kind: 123
+doc_path: templates/project/known-issue.md
+selector_type: header_path
+section_selector: 문서 정본과 실제 구조 불일치
+why: direct symptom check
+""",
+            "read_target_kind",
+        ),
+        (
+            """read_target_kind: unknown_target
+doc_path: templates/project/known-issue.md
+selector_type: header_path
+section_selector: 문서 정본과 실제 구조 불일치
+why: direct symptom check
+""",
+            "read_target_kind",
+        ),
+        (
+            """read_target_kind: doc_section
+doc_path: templates/project/known-issue.md
+selector_type: 123
+section_selector: 문서 정본과 실제 구조 불일치
+why: direct symptom check
+""",
+            "selector_type",
+        ),
+        (
+            """read_target_kind: doc_section
+doc_path: templates/project/known-issue.md
+selector_type: unknown_selector
+section_selector: 문서 정본과 실제 구조 불일치
+why: direct symptom check
+""",
+            "selector_type",
+        ),
+        (
+            """read_target_kind: doc_section
+doc_path: templates/project/known-issue.md
+selector_type: header_path
+section_selector: null
+why: direct symptom check
+""",
+            "section_selector",
+        ),
+        (
+            """read_target_kind: doc_section
+doc_path: templates/project/known-issue.md
+selector_type: header_set
+section_selector:
+  - 문서 정본과 실제 구조 불일치
+  - 123
+why: direct symptom check
+""",
+            "section_selector",
+        ),
+    ],
+)
+def test_repo_profile_rejects_invalid_typed_read_entry_fields(
+    tmp_path: Path,
+    entry_yaml: str,
+    match: str,
+) -> None:
+    entry_lines = entry_yaml.splitlines()
+    indented_entry = "\n".join(
+        [f"  - {entry_lines[0]}"]
+        + [f"    {line}" if line else "" for line in entry_lines[1:]]
+    )
+    profile_path = _write_profile(
+        tmp_path,
+        f"""# Test Profile
+
+```yaml
+profile_id: test
+profile_version: 1
+known_issue_selector_mapping:
+{indented_entry}
+```
+""",
+    )
+
+    with pytest.raises(RepoProfileLoadError, match=match):
+        load_repo_profile(profile_path, workspace_root=tmp_path)
+
+
+def test_repo_profile_ignores_unconfigured_toolchain_stub_gates(tmp_path: Path) -> None:
+    profile_path = _write_profile(
+        tmp_path,
+        """# Test Profile
+
+```yaml
+profile_id: test
+profile_version: 1
+verification_toolchain:
+  configured: false
+  build_tool: maven
+  test_tool: surefire
+  working_directory: service
+  required_gates:
+    - name: null
+      command: null
+      working_directory: null
+      success_criteria: null
+      evidence: null
+  notes:
+    - ignored stub note
+```
+""",
+    )
+
+    profile = load_repo_profile(profile_path, workspace_root=tmp_path)
+
+    assert profile.verification_toolchain is not None
+    assert profile.verification_toolchain.configured is False
+    assert profile.verification_toolchain.build_tool == ""
+    assert profile.verification_toolchain.test_tool is None
+    assert profile.verification_toolchain.working_directory == "."
+    assert profile.verification_toolchain.required_gates == []
+    assert profile.verification_toolchain.notes == []
+
+
+def test_repo_profile_rejects_quoted_toolchain_configured_false(tmp_path: Path) -> None:
+    profile_path = _write_profile(
+        tmp_path,
+        """# Test Profile
+
+```yaml
+profile_id: test
+profile_version: 1
+verification_toolchain:
+  configured: "false"
+  build_tool: maven
+  required_gates: []
+```
+""",
+    )
+
+    with pytest.raises(RepoProfileLoadError, match="boolean"):
+        load_repo_profile(profile_path, workspace_root=tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("extra_yaml", "match"),
+    [
+        (
+            """  conditional_gates:
+    - condition: null
+      gate: run API scenario check
+""",
+            "condition",
+        ),
+        (
+            """  conditional_gates:
+    - condition: public API changed
+      gate: null
+""",
+            "gate",
+        ),
+        (
+            """  manual_checks:
+    - check: null
+      evidence: reviewed endpoint scenario notes
+""",
+            "check",
+        ),
+        (
+            """  manual_checks:
+    - check: compare Spring endpoint behavior
+      evidence: null
+""",
+            "evidence",
+        ),
+    ],
+)
+def test_repo_profile_rejects_configured_toolchain_with_invalid_conditional_or_manual_field(
+    tmp_path: Path,
+    extra_yaml: str,
+    match: str,
+) -> None:
+    profile_path = _write_profile(
+        tmp_path,
+        f"""# Test Profile
+
+```yaml
+profile_id: test
+profile_version: 1
+verification_toolchain:
+  configured: true
+  build_tool: maven
+  required_gates:
+    - name: Tests
+      command: ./mvnw test
+      working_directory: .
+      success_criteria: exits 0
+      evidence: surefire report
+{extra_yaml}```
+""",
+    )
+
+    with pytest.raises(RepoProfileLoadError, match=match):
+        load_repo_profile(profile_path, workspace_root=tmp_path)
 
 
 def test_guard_blocks_partial_task_initialization(tmp_path: Path) -> None:

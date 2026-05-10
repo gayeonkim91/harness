@@ -10,6 +10,7 @@
 - `workflow_kind=runbook`일 때만 아래 task classification과 initial phase 판단을 계속한다
 - `user_request`와 repo profile을 바탕으로 `task_classification`을 결정한다
 - guided mode라면 도입 유형 판정 결과와 필수 문서 세트 충족 여부를 먼저 확인한다
+- repo 최초 세팅 시에는 `contracts/repo_profile.md`의 `verification_toolchain`에 실제 build/test/gate 도구가 정해져 있는지 확인한다
 - `initial_phase`를 `pre-planning | plan` 중 하나로 결정한다
 - `minimum_read_set`과 `phase_doc_ref`를 구성한다
 - deterministic helper에 넘길 구조화된 값을 만든다
@@ -23,6 +24,7 @@
 
 ## Python Helper Boundary
 - Python helper는 scaffold/state write만 담당한다
+- repo profile의 `verification_toolchain.configured=true`이면 helper는 이를 `plan.md` Verification 초기 계약에 우선 반영한다
 - 신규 runbook task에서는 `steps.md`를 만들지 않고 `plan.md` 안의 `Steps` / `Working Notes` section을 scaffold한다
 - helper command: `cd python && PYTHONPATH=src python3 -m harness.runtime_cli wf-start-runtime`
 

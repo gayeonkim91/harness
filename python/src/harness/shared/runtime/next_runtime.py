@@ -19,6 +19,7 @@ from harness.shared.contracts.results import (
     ReviewResult,
     VerificationItem,
     VerificationResult,
+    normalize_verification_lint_warnings,
 )
 from harness.shared.contracts.state import CurrentPhase, DeferredStateTransition, HarnessCounters, HarnessState, ReviewOutcome, SessionState
 from harness.shared.core.state_migration import StateMigrationError
@@ -371,6 +372,7 @@ def _read_verification_result(task_root: Path, ref: str) -> VerificationResult:
         stop_condition_code=payload.get("stop_condition_code"),
         primary_cause_code=payload.get("primary_cause_code"),
         reason_fingerprint=payload.get("reason_fingerprint"),
+        lint_warnings=normalize_verification_lint_warnings(payload.get("lint_warnings", [])),
     )
 
 

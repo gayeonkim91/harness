@@ -29,12 +29,28 @@ FAILURE_REVIEW_JUDGEMENTS = {
 }
 
 
+class ReviewResultContractError(ValueError):
+    """Raised when raw review output cannot be normalized to the review result contract."""
+
+    def __init__(self, reason_code: str, message: str) -> None:
+        super().__init__(message)
+        self.reason_code = reason_code
+
+
+def _has_text(value: Any) -> bool:
+    return isinstance(value, str) and bool(value.strip())
+
+
 @dataclass(slots=True)
 class ReviewRuntimeInput:
-    """Normalized review result persistence input."""
+    """Normalized review result persistence input.
+
+    candidate_basis_refs is accepted for CLI compatibility and exploration hints,
+    but review result persistence does not consume or persist it.
+    """
 
     task_root: Path
-    review_result: ReviewResult
+    review_result: ReviewResult | dict[str, Any]
     workspace_root: Path | None = None
     caller_summary_hint: str | None = None
     candidate_basis_refs: list[str] | None = None
@@ -43,8 +59,6 @@ class ReviewRuntimeInput:
         self.task_root = Path(self.task_root)
         if self.workspace_root is not None:
             self.workspace_root = Path(self.workspace_root)
-        if isinstance(self.review_result, dict):
-            self.review_result = _normalize_review_result(self.review_result)
         if self.candidate_basis_refs is None:
             self.candidate_basis_refs = []
 
@@ -90,7 +104,14 @@ def persist_review_runtime(input_data: ReviewRuntimeInput) -> dict[str, object]:
     if verification_payload["verified_task_diff_fingerprint"] != current_fingerprint:
         return _blocked_review_output("REVIEW_VERIFICATION_STALE", "Current task diff no longer matches latest verification.")
 
-    result = input_data.review_result
+    try:
+        result = _coerce_review_result(input_data.review_result)
+    except ReviewResultContractError as exc:
+        failure_ref = _record_review_failure(task_paths, state, exc.reason_code, input_data.review_result)
+        blocked = _blocked_review_output(exc.reason_code, str(exc))
+        blocked["review_failure_ref"] = failure_ref
+        return blocked
+
     invalid_reason = _validate_review_result(result, phase_spec)
     if invalid_reason is not None:
         failure_ref = _record_review_failure(task_paths, state, invalid_reason, result)
@@ -171,18 +192,24 @@ def _read_latest_verification(task_root: Path, verification_ref: str) -> dict[st
 
 
 def _validate_review_result(result: ReviewResult, phase_spec: PhaseSpec) -> str | None:
-    if not result.summary.strip():
+    if not _has_text(result.summary):
         return "REVIEW_RESULT_CONTRACT_INVALID"
     if result.judgement_code.value not in phase_spec.allowed_judgements:
         return "REVIEW_JUDGEMENT_INVALID"
     if result.out_of_scope_change and result.judgement_code in {JudgementCode.DONE, JudgementCode.DONE_WITH_NOTE}:
         return "REVIEW_OUT_OF_SCOPE_INVALID"
-    if result.judgement_code == JudgementCode.DONE_WITH_NOTE and not result.carry_forward_notes:
+    if any(not _has_text(blind_spot) for blind_spot in result.verification_blind_spots):
+        return "REVIEW_VERIFICATION_BLIND_SPOTS_INVALID"
+    if result.judgement_code == JudgementCode.DONE_WITH_NOTE and (
+        not result.carry_forward_notes or any(not _has_text(note) for note in result.carry_forward_notes)
+    ):
         return "REVIEW_CARRY_FORWARD_NOTES_INVALID"
-    if result.judgement_code in FAILURE_REVIEW_JUDGEMENTS and not result.key_issues:
+    if result.judgement_code in FAILURE_REVIEW_JUDGEMENTS and (
+        not result.key_issues or any(not _has_text(issue) for issue in result.key_issues)
+    ):
         return "REVIEW_KEY_ISSUES_REQUIRED"
     if result.judgement_code in FAILURE_REVIEW_JUDGEMENTS and (
-        not result.primary_cause_code or not result.reason_fingerprint
+        not _has_text(result.primary_cause_code) or not _has_text(result.reason_fingerprint)
     ):
         return "REVIEW_REASON_REQUIRED"
     return None
@@ -192,7 +219,7 @@ def _record_review_failure(
     task_paths: TaskPaths,
     state: HarnessState,
     reason_code: str,
-    result: ReviewResult,
+    review_output: object,
 ) -> str:
     failure_path = reserve_log_path(task_paths.logs_dir, "review-failures")
     failure_ref = log_ref_for_path(task_paths.logs_dir, failure_path)
@@ -201,7 +228,7 @@ def _record_review_failure(
         "status": "blocked",
         "occurred_at": _kst_timestamp(),
         "reason_code": reason_code,
-        "review_output": to_jsonable(result),
+        "review_output": to_jsonable(review_output),
     }
     failure_path.write_text(json.dumps(payload, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
     write_state(task_paths.state_path, _with_review_blocked_state(state, failure_ref))
@@ -286,23 +313,105 @@ def _with_review_state_update_blocked_state(state: HarnessState, review_ref: str
     )
 
 
-def _normalize_review_result(payload: dict[str, Any]) -> ReviewResult:
-    return ReviewResult(
-        review_ref=str(payload.get("review_ref", "")),
-        judgement_code=JudgementCode(payload["judgement_code"]),
-        summary=str(payload["summary"]),
-        out_of_scope_change=_strict_bool(payload["out_of_scope_change"]),
-        key_issues=[str(item) for item in payload.get("key_issues", [])],
-        verification_blind_spots=[str(item) for item in payload.get("verification_blind_spots", [])],
-        carry_forward_notes=[str(item) for item in payload.get("carry_forward_notes", [])],
-        basis_refs=[str(item) for item in payload.get("basis_refs", [])],
-        verified_task_diff_fingerprint=payload.get("verified_task_diff_fingerprint"),
-        primary_cause_code=payload.get("primary_cause_code"),
-        reason_fingerprint=payload.get("reason_fingerprint"),
-    )
+def _contract_error(reason_code: str, message: str) -> ReviewResultContractError:
+    return ReviewResultContractError(reason_code, message)
 
 
-def _strict_bool(value: Any) -> bool:
+def _required_dict_string(payload: dict[str, Any], key: str, field_name: str) -> str:
+    if key not in payload:
+        raise _contract_error("REVIEW_RESULT_CONTRACT_INVALID", f"{field_name} is required.")
+    value = payload[key]
+    if not isinstance(value, str):
+        raise _contract_error("REVIEW_RESULT_CONTRACT_INVALID", f"{field_name} must be a string.")
+    return value
+
+
+def _optional_dict_string(payload: dict[str, Any], key: str, field_name: str) -> str | None:
+    if key not in payload or payload[key] is None:
+        return None
+    value = payload[key]
+    if not isinstance(value, str):
+        raise _contract_error("REVIEW_RESULT_CONTRACT_INVALID", f"{field_name} must be a string when present.")
+    return value
+
+
+def _dict_string_with_default(payload: dict[str, Any], key: str, field_name: str, default: str) -> str:
+    if key not in payload:
+        return default
+    value = payload[key]
+    if not isinstance(value, str):
+        raise _contract_error("REVIEW_RESULT_CONTRACT_INVALID", f"{field_name} must be a string when present.")
+    return value
+
+
+def _optional_dict_list(payload: dict[str, Any], key: str, field_name: str) -> list[Any]:
+    if key not in payload:
+        return []
+    value = payload[key]
+    if not isinstance(value, list):
+        raise _contract_error("REVIEW_RESULT_CONTRACT_INVALID", f"{field_name} must be a list when present.")
+    return value
+
+
+def _optional_dict_string_list(payload: dict[str, Any], key: str, field_name: str) -> list[str]:
+    values = _optional_dict_list(payload, key, field_name)
+    result: list[str] = []
+    for index, value in enumerate(values):
+        if not isinstance(value, str):
+            raise _contract_error("REVIEW_RESULT_CONTRACT_INVALID", f"{field_name}[{index}] must be a string.")
+        result.append(value)
+    return result
+
+
+def _required_dict_bool(payload: dict[str, Any], key: str, field_name: str) -> bool:
+    if key not in payload:
+        raise _contract_error("REVIEW_RESULT_CONTRACT_INVALID", f"{field_name} is required.")
+    value = payload[key]
     if isinstance(value, bool):
         return value
-    raise ValueError("Boolean field must be a JSON boolean.")
+    raise _contract_error("REVIEW_RESULT_CONTRACT_INVALID", f"{field_name} must be a JSON boolean.")
+
+
+def _judgement_code(value: str, field_name: str) -> JudgementCode:
+    try:
+        return JudgementCode(value)
+    except ValueError as exc:
+        allowed = ", ".join(item.value for item in JudgementCode)
+        raise _contract_error("REVIEW_JUDGEMENT_INVALID", f"{field_name} must be one of: {allowed}.") from exc
+
+
+def _coerce_review_result(value: ReviewResult | dict[str, Any]) -> ReviewResult:
+    if isinstance(value, ReviewResult):
+        return value
+    if isinstance(value, dict):
+        return _normalize_review_result(value)
+    raise _contract_error("REVIEW_RESULT_CONTRACT_INVALID", "review_result must be a mapping.")
+
+
+def _normalize_review_result(payload: dict[str, Any]) -> ReviewResult:
+    judgement_code = _required_dict_string(payload, "judgement_code", "review_result.judgement_code")
+    return ReviewResult(
+        review_ref=_dict_string_with_default(payload, "review_ref", "review_result.review_ref", ""),
+        judgement_code=_judgement_code(judgement_code, "review_result.judgement_code"),
+        summary=_required_dict_string(payload, "summary", "review_result.summary"),
+        out_of_scope_change=_required_dict_bool(payload, "out_of_scope_change", "review_result.out_of_scope_change"),
+        key_issues=_optional_dict_string_list(payload, "key_issues", "review_result.key_issues"),
+        verification_blind_spots=_optional_dict_string_list(
+            payload,
+            "verification_blind_spots",
+            "review_result.verification_blind_spots",
+        ),
+        carry_forward_notes=_optional_dict_string_list(
+            payload,
+            "carry_forward_notes",
+            "review_result.carry_forward_notes",
+        ),
+        basis_refs=_optional_dict_string_list(payload, "basis_refs", "review_result.basis_refs"),
+        verified_task_diff_fingerprint=_optional_dict_string(
+            payload,
+            "verified_task_diff_fingerprint",
+            "review_result.verified_task_diff_fingerprint",
+        ),
+        primary_cause_code=_optional_dict_string(payload, "primary_cause_code", "review_result.primary_cause_code"),
+        reason_fingerprint=_optional_dict_string(payload, "reason_fingerprint", "review_result.reason_fingerprint"),
+    )

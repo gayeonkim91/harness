@@ -172,7 +172,7 @@ def test_persist_checkpoint_runtime_records_guard_loaded_profile_context(tmp_pat
     assert result["reason_code"] is None
     assert payload["repo_profile_context"] == {
         "profile_id": "workspace-default",
-        "profile_version": 7,
+        "profile_version": 8,
         "applicable_checkpoint_supplements": [],
     }
 

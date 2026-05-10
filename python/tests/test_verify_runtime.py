@@ -6,12 +6,25 @@ import sys
 from io import StringIO
 from pathlib import Path
 
+import pytest
+
 import harness.shared.runtime.verify_runtime as verify_runtime
 from harness.runtime_cli import main
 from harness.shared.artifacts.state_artifact import read_state, write_state
-from harness.shared.contracts.results import JudgementCode, NoteSignal, NoteTargetHint, VerificationItem, VerificationResult
+from harness.shared.contracts.results import (
+    JudgementCode,
+    NoteSignal,
+    NoteTargetHint,
+    VerificationItem,
+    VerificationLintWarningCode,
+    VerificationResult,
+)
 from harness.shared.contracts.state import CurrentPhase, HarnessCounters, HarnessState, SessionState, WorkflowMode
 from harness.shared.core.snapshot_helper import capture_workspace_baseline
+from harness.shared.integrations.test_report_skill_bridge import (
+    TEST_REPORT_STANDALONE_REF,
+    TEST_REPORT_VERIFICATION_ASSIST_REF,
+)
 from harness.shared.runtime.verify_runtime import VerifyRuntimeInput, persist_verify_runtime
 
 
@@ -80,27 +93,56 @@ def _verification_result(
     note_signals: list[NoteSignal] | None = None,
     primary_cause_code: str | None = None,
     reason_fingerprint: str | None = None,
+    basis_refs: list[str] | None = None,
+    item_basis_refs: list[str] | None = None,
+    item_key: str = "gate-tests",
+    item_type: str = "gate",
+    label: str = "Test suite",
+    method: str = "pytest",
+    item_summary: str = "All selected tests passed.",
 ) -> VerificationResult:
+    resolved_basis_refs = basis_refs or ["logs/test-output.txt"]
     return VerificationResult(
         verification_ref="",
         judgement_code=judgement,
         summary="Verification passed.",
         verification_items=[
             VerificationItem(
-                item_key="gate-tests",
-                item_type="gate",
-                label="Test suite",
-                method="pytest",
+                item_key=item_key,
+                item_type=item_type,
+                label=label,
+                method=method,
                 result="PASS",
-                summary="All selected tests passed.",
-                basis_refs=["logs/test-output.txt"],
+                summary=item_summary,
+                basis_refs=item_basis_refs or ["logs/test-output.txt"],
             )
         ],
-        basis_refs=["logs/test-output.txt"],
+        basis_refs=resolved_basis_refs,
         note_signals=note_signals or [],
         primary_cause_code=primary_cause_code,
         reason_fingerprint=reason_fingerprint,
     )
+
+
+def _verification_result_payload() -> dict[str, object]:
+    return {
+        "verification_ref": "",
+        "judgement_code": "GO",
+        "summary": "Verification passed.",
+        "verification_items": [
+            {
+                "item_key": "gate-tests",
+                "item_type": "gate",
+                "label": "Test suite",
+                "method": "pytest",
+                "result": "PASS",
+                "summary": "All selected tests passed.",
+                "basis_refs": ["logs/test-output.txt"],
+            }
+        ],
+        "basis_refs": ["logs/test-output.txt"],
+        "note_signals": [],
+    }
 
 
 def test_persist_verify_runtime_blocks_plan_mirror_read_error_as_invalid_state(tmp_path: Path) -> None:
@@ -148,6 +190,7 @@ def test_persist_verify_runtime_writes_log_state_and_fingerprint(tmp_path: Path)
     assert payload["verified_task_diff_fingerprint"].startswith("sha256:")
     assert result["verified_task_diff_fingerprint"] == payload["verified_task_diff_fingerprint"]
     assert state.current_phase == CurrentPhase.VERIFICATION
+    assert "VERIFY_TEST_REPORT_SKILL_BYPASSED" in payload["lint_warnings"]
 
 
 def test_persist_verify_runtime_reports_state_update_failure(monkeypatch, tmp_path: Path) -> None:
@@ -368,6 +411,383 @@ def test_persist_verify_runtime_rejects_invalid_note_target(tmp_path: Path) -> N
     assert result["reason_code"] == "VERIFY_NOTE_SIGNALS_INVALID"
 
 
+def test_persist_verify_runtime_rejects_blank_note_signal_text(tmp_path: Path) -> None:
+    _, task_root, baseline_ref = _workspace_with_baseline(tmp_path)
+    _write_plan(task_root)
+    _write_state(task_root, baseline_ref)
+
+    result = persist_verify_runtime(
+        VerifyRuntimeInput(
+            task_root=task_root,
+            workspace_root=REPO_ROOT,
+            verification_result=_verification_result(
+                JudgementCode.GO_WITH_NOTE,
+                note_signals=[
+                    NoteSignal(
+                        note_text=" ",
+                        note_target_hint=NoteTargetHint.PLAN,
+                        note_basis_refs=["verification.md#note"],
+                    )
+                ],
+            ),
+        )
+    )
+
+    assert result["reason_code"] == "VERIFY_NOTE_SIGNALS_INVALID"
+
+
+def test_persist_verify_runtime_blocks_raw_stack_trace_in_verification_doc(tmp_path: Path) -> None:
+    _, task_root, baseline_ref = _workspace_with_baseline(tmp_path)
+    _write_plan(task_root)
+    _write_state(task_root, baseline_ref)
+    (task_root / "verification.md").write_text(
+        """# Verification
+
+Traceback (most recent call last):
+  File "test.py", line 1, in <module>
+ValueError: boom
+""",
+        encoding="utf-8",
+    )
+
+    result = persist_verify_runtime(
+        VerifyRuntimeInput(
+            task_root=task_root,
+            workspace_root=REPO_ROOT,
+            verification_result=_verification_result(),
+        )
+    )
+
+    assert result["reason_code"] == "VERIFY_CONSOLE_STACK_TRACE_BLOCKED"
+    assert list((task_root / "logs" / "verification").glob("*.json")) == []
+
+
+def test_persist_verify_runtime_allows_single_caused_by_summary(tmp_path: Path) -> None:
+    workspace, task_root, baseline_ref = _workspace_with_baseline(tmp_path)
+    _write_plan(task_root)
+    _write_state(task_root, baseline_ref)
+    (workspace / "new-file.txt").write_text("new\n", encoding="utf-8")
+
+    result = persist_verify_runtime(
+        VerifyRuntimeInput(
+            task_root=task_root,
+            workspace_root=REPO_ROOT,
+            verification_result=_verification_result(
+                basis_refs=["logs/test-output.txt", TEST_REPORT_VERIFICATION_ASSIST_REF],
+                item_summary="Representative cause: Caused by: java.lang.IllegalStateException",
+            ),
+        )
+    )
+
+    assert result["reason_code"] is None
+
+
+def test_persist_verify_runtime_blocks_unreadable_verification_doc(monkeypatch, tmp_path: Path) -> None:
+    _, task_root, baseline_ref = _workspace_with_baseline(tmp_path)
+    _write_plan(task_root)
+    _write_state(task_root, baseline_ref)
+    (task_root / "verification.md").write_text("# Verification\n", encoding="utf-8")
+    original_read_text = Path.read_text
+
+    def fail_verification_read(path: Path, *args, **kwargs):
+        if path == task_root / "verification.md":
+            raise OSError("cannot read verification.md")
+        return original_read_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", fail_verification_read)
+
+    result = persist_verify_runtime(
+        VerifyRuntimeInput(
+            task_root=task_root,
+            workspace_root=REPO_ROOT,
+            verification_result=_verification_result(),
+        )
+    )
+
+    assert result["reason_code"] == "VERIFY_VERIFICATION_DOC_UNREADABLE"
+
+
+def test_persist_verify_runtime_omits_test_report_warning_when_bridge_marker_present(tmp_path: Path) -> None:
+    workspace, task_root, baseline_ref = _workspace_with_baseline(tmp_path)
+    _write_plan(task_root)
+    _write_state(task_root, baseline_ref)
+    (workspace / "new-file.txt").write_text("new\n", encoding="utf-8")
+
+    result = persist_verify_runtime(
+        VerifyRuntimeInput(
+            task_root=task_root,
+            workspace_root=REPO_ROOT,
+            verification_result=_verification_result(
+                basis_refs=["logs/test-output.txt", TEST_REPORT_VERIFICATION_ASSIST_REF],
+            ),
+        )
+    )
+
+    payload = json.loads((task_root / str(result["verification_ref"])).read_text(encoding="utf-8"))
+    assert result["reason_code"] is None
+    assert "VERIFY_TEST_REPORT_SKILL_BYPASSED" not in payload["lint_warnings"]
+
+
+def test_persist_verify_runtime_does_not_use_candidate_basis_refs_to_suppress_test_report_warning(
+    tmp_path: Path,
+) -> None:
+    workspace, task_root, baseline_ref = _workspace_with_baseline(tmp_path)
+    _write_plan(task_root)
+    _write_state(task_root, baseline_ref)
+    (workspace / "new-file.txt").write_text("new\n", encoding="utf-8")
+
+    result = persist_verify_runtime(
+        VerifyRuntimeInput(
+            task_root=task_root,
+            workspace_root=REPO_ROOT,
+            verification_result=_verification_result(),
+            candidate_basis_refs=[TEST_REPORT_VERIFICATION_ASSIST_REF],
+        )
+    )
+
+    payload = json.loads((task_root / str(result["verification_ref"])).read_text(encoding="utf-8"))
+    assert result["reason_code"] is None
+    assert TEST_REPORT_VERIFICATION_ASSIST_REF not in payload["basis_refs"]
+    assert "VERIFY_TEST_REPORT_SKILL_BYPASSED" in payload["lint_warnings"]
+
+
+def test_persist_verify_runtime_does_not_accept_standalone_test_report_marker(tmp_path: Path) -> None:
+    workspace, task_root, baseline_ref = _workspace_with_baseline(tmp_path)
+    _write_plan(task_root)
+    _write_state(task_root, baseline_ref)
+    (workspace / "new-file.txt").write_text("new\n", encoding="utf-8")
+
+    result = persist_verify_runtime(
+        VerifyRuntimeInput(
+            task_root=task_root,
+            workspace_root=REPO_ROOT,
+            verification_result=_verification_result(
+                basis_refs=["logs/test-output.txt", TEST_REPORT_STANDALONE_REF],
+            ),
+        )
+    )
+
+    payload = json.loads((task_root / str(result["verification_ref"])).read_text(encoding="utf-8"))
+    assert "VERIFY_TEST_REPORT_SKILL_BYPASSED" in payload["lint_warnings"]
+
+
+@pytest.mark.parametrize(
+    "method",
+    [
+        "./mvnw verify",
+        "ruff check .",
+        "mypy src",
+        "tsc --noEmit",
+    ],
+)
+def test_persist_verify_runtime_warns_for_static_analysis_gate_without_report_bridge(
+    tmp_path: Path,
+    method: str,
+) -> None:
+    workspace, task_root, baseline_ref = _workspace_with_baseline(tmp_path)
+    _write_plan(task_root)
+    _write_state(task_root, baseline_ref)
+    (workspace / "new-file.txt").write_text("new\n", encoding="utf-8")
+
+    result = persist_verify_runtime(
+        VerifyRuntimeInput(
+            task_root=task_root,
+            workspace_root=REPO_ROOT,
+            verification_result=_verification_result(
+                item_key="quality-gate",
+                label="Quality gate",
+                method=method,
+            ),
+        )
+    )
+
+    payload = json.loads((task_root / str(result["verification_ref"])).read_text(encoding="utf-8"))
+    assert "VERIFY_TEST_REPORT_SKILL_BYPASSED" in payload["lint_warnings"]
+
+
+def test_persist_verify_runtime_warns_for_autofix_command_in_any_item_type(tmp_path: Path) -> None:
+    workspace, task_root, baseline_ref = _workspace_with_baseline(tmp_path)
+    _write_plan(task_root)
+    _write_state(task_root, baseline_ref)
+    (workspace / "new-file.txt").write_text("new\n", encoding="utf-8")
+
+    result = persist_verify_runtime(
+        VerifyRuntimeInput(
+            task_root=task_root,
+            workspace_root=REPO_ROOT,
+            verification_result=_verification_result(
+                basis_refs=["logs/format-output.txt", TEST_REPORT_VERIFICATION_ASSIST_REF],
+                item_type="gate",
+                method="./gradlew :api:spotlessApply",
+            ),
+        )
+    )
+
+    payload = json.loads((task_root / str(result["verification_ref"])).read_text(encoding="utf-8"))
+    assert "VERIFY_AUTOFIX_COMMAND_RECORDED" in payload["lint_warnings"]
+
+
+def test_persist_verify_runtime_does_not_require_test_report_for_cleanup_gradle_item(tmp_path: Path) -> None:
+    workspace, task_root, baseline_ref = _workspace_with_baseline(tmp_path)
+    _write_plan(task_root)
+    _write_state(task_root, baseline_ref)
+    (workspace / "new-file.txt").write_text("new\n", encoding="utf-8")
+
+    result = persist_verify_runtime(
+        VerifyRuntimeInput(
+            task_root=task_root,
+            workspace_root=REPO_ROOT,
+            verification_result=_verification_result(
+                basis_refs=["logs/gradle-clean.txt"],
+                item_type="cleanup",
+                method="./gradlew clean",
+            ),
+        )
+    )
+
+    payload = json.loads((task_root / str(result["verification_ref"])).read_text(encoding="utf-8"))
+    assert "VERIFY_TEST_REPORT_SKILL_BYPASSED" not in payload["lint_warnings"]
+
+
+def test_persist_verify_runtime_drops_unknown_lint_warning_codes(tmp_path: Path) -> None:
+    workspace, task_root, baseline_ref = _workspace_with_baseline(tmp_path)
+    _write_plan(task_root)
+    _write_state(task_root, baseline_ref)
+    (workspace / "new-file.txt").write_text("new\n", encoding="utf-8")
+    verification_result = _verification_result(
+        basis_refs=["logs/test-output.txt", TEST_REPORT_VERIFICATION_ASSIST_REF],
+    )
+    verification_result.lint_warnings = [
+        "UNKNOWN_WARNING",
+        VerificationLintWarningCode.AUTOFIX_COMMAND_RECORDED,
+    ]
+
+    result = persist_verify_runtime(
+        VerifyRuntimeInput(
+            task_root=task_root,
+            workspace_root=REPO_ROOT,
+            verification_result=verification_result,
+        )
+    )
+
+    payload = json.loads((task_root / str(result["verification_ref"])).read_text(encoding="utf-8"))
+    assert payload["lint_warnings"] == ["VERIFY_AUTOFIX_COMMAND_RECORDED"]
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message_fragment"),
+    [
+        (lambda result: result.update({"judgement_code": None}), "verification_result.judgement_code"),
+        (lambda result: result.update({"judgement_code": 123}), "verification_result.judgement_code"),
+        (lambda result: result.update({"judgement_code": "INVALID"}), "verification_result.judgement_code"),
+        (lambda result: result.update({"summary": None}), "verification_result.summary"),
+        (
+            lambda result: result["verification_items"][0].update({"item_key": None}),
+            "verification_result.verification_items\\[0\\].item_key",
+        ),
+        (
+            lambda result: result["verification_items"][0].update({"item_type": None}),
+            "verification_result.verification_items\\[0\\].item_type",
+        ),
+        (
+            lambda result: result["verification_items"][0].update({"label": None}),
+            "verification_result.verification_items\\[0\\].label",
+        ),
+        (
+            lambda result: result["verification_items"][0].update({"method": None}),
+            "verification_result.verification_items\\[0\\].method",
+        ),
+        (
+            lambda result: result["verification_items"][0].update({"summary": None}),
+            "verification_result.verification_items\\[0\\].summary",
+        ),
+        (
+            lambda result: result["verification_items"][0].update({"result": None}),
+            "verification_result.verification_items\\[0\\].result",
+        ),
+        (
+            lambda result: result["verification_items"][0].update({"basis_refs": ["logs/test-output.txt", 123]}),
+            "verification_result.verification_items\\[0\\].basis_refs\\[1\\]",
+        ),
+        (lambda result: result.update({"basis_refs": [None]}), "verification_result.basis_refs\\[0\\]"),
+        (
+            lambda result: result.update(
+                {
+                    "judgement_code": "GO_WITH_NOTE",
+                    "note_signals": [
+                        {
+                            "note_text": None,
+                            "note_target_hint": "plan",
+                            "note_basis_refs": ["verification.md#note"],
+                        }
+                    ],
+                }
+            ),
+            "verification_result.note_signals\\[0\\].note_text",
+        ),
+        (
+            lambda result: result.update(
+                {
+                    "judgement_code": "GO_WITH_NOTE",
+                    "note_signals": [
+                        {
+                            "note_text": "Carry note.",
+                            "note_target_hint": "invalid",
+                            "note_basis_refs": ["verification.md#note"],
+                        }
+                    ],
+                }
+            ),
+            "verification_result.note_signals\\[0\\].note_target_hint",
+        ),
+    ],
+)
+def test_verify_runtime_rejects_invalid_dict_result_contract_fields(
+    tmp_path: Path,
+    mutate,
+    message_fragment: str,
+) -> None:
+    _, task_root, baseline_ref = _workspace_with_baseline(tmp_path)
+    _write_plan(task_root)
+    _write_state(task_root, baseline_ref)
+    payload = _verification_result_payload()
+    mutate(payload)
+
+    result = persist_verify_runtime(
+        VerifyRuntimeInput(
+            task_root=task_root,
+            workspace_root=REPO_ROOT,
+            verification_result=payload,
+        )
+    )
+
+    assert result["reason_code"] == "VERIFY_RESULT_CONTRACT_INVALID"
+    assert message_fragment.replace("\\", "") in str(result["message_summary"])
+    assert result["verification_ref"] is None
+    assert list((task_root / "logs" / "verification").glob("*.json")) == []
+    assert read_state(task_root / "state.json").session_state == SessionState.IN_PROGRESS
+
+
+def test_persist_verify_runtime_rejects_whitespace_failure_reason_fields(tmp_path: Path) -> None:
+    _, task_root, baseline_ref = _workspace_with_baseline(tmp_path)
+    _write_plan(task_root)
+    _write_state(task_root, baseline_ref)
+
+    result = persist_verify_runtime(
+        VerifyRuntimeInput(
+            task_root=task_root,
+            workspace_root=REPO_ROOT,
+            verification_result=_verification_result(
+                JudgementCode.REWORK,
+                primary_cause_code=" ",
+                reason_fingerprint="reason",
+            ),
+        )
+    )
+
+    assert result["reason_code"] == "VERIFY_REASON_REQUIRED"
+
+
 def test_runtime_cli_serializes_verify_result(monkeypatch, capsys, tmp_path: Path) -> None:
     _, task_root, baseline_ref = _workspace_with_baseline(tmp_path)
     _write_plan(task_root)
@@ -375,24 +795,7 @@ def test_runtime_cli_serializes_verify_result(monkeypatch, capsys, tmp_path: Pat
     payload = {
         "task_root": str(task_root),
         "workspace_root": str(REPO_ROOT),
-        "verification_result": {
-            "verification_ref": "",
-            "judgement_code": "GO",
-            "summary": "Verification passed.",
-            "verification_items": [
-                {
-                    "item_key": "gate-tests",
-                    "item_type": "gate",
-                    "label": "Test suite",
-                    "method": "pytest",
-                    "result": "PASS",
-                    "summary": "All selected tests passed.",
-                    "basis_refs": ["logs/test-output.txt"],
-                }
-            ],
-            "basis_refs": ["logs/test-output.txt"],
-            "note_signals": [],
-        },
+        "verification_result": _verification_result_payload(),
     }
     monkeypatch.setattr(sys, "argv", ["harness-runtime", "wf-verify-runtime"])
     monkeypatch.setattr(sys, "stdin", StringIO(json.dumps(payload)))
@@ -403,3 +806,27 @@ def test_runtime_cli_serializes_verify_result(monkeypatch, capsys, tmp_path: Pat
     assert exit_code == 0
     assert output["reason_code"] is None
     assert output["verification_ref"].startswith("logs/verification/")
+
+
+def test_runtime_cli_returns_blocked_output_for_invalid_verify_payload(monkeypatch, capsys, tmp_path: Path) -> None:
+    _, task_root, baseline_ref = _workspace_with_baseline(tmp_path)
+    _write_plan(task_root)
+    _write_state(task_root, baseline_ref)
+    verification_result = _verification_result_payload()
+    verification_result["summary"] = None
+    payload = {
+        "task_root": str(task_root),
+        "workspace_root": str(REPO_ROOT),
+        "verification_result": verification_result,
+    }
+    monkeypatch.setattr(sys, "argv", ["harness-runtime", "wf-verify-runtime"])
+    monkeypatch.setattr(sys, "stdin", StringIO(json.dumps(payload)))
+
+    exit_code = main()
+    output = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 0
+    assert output["reason_code"] == "VERIFY_RESULT_CONTRACT_INVALID"
+    assert "verification_result.summary" in output["message_summary"]
+    assert output["verification_ref"] is None
+    assert list((task_root / "logs" / "verification").glob("*.json")) == []

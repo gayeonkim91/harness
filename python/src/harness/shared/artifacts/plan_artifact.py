@@ -11,6 +11,7 @@ from harness.shared.contracts.profile import (
     ManualVerificationCheck,
     VerificationGate,
     VerificationGateTemplate,
+    VerificationToolchain,
 )
 from harness.shared.contracts.state import (
     CurrentPhase,
@@ -577,6 +578,7 @@ def render_initial_verification_contract(
     task_classification: str,
     template: VerificationGateTemplate | None,
     gate_source: str,
+    toolchain: VerificationToolchain | None = None,
 ) -> str:
     """Render the /wf-start initialized task-local verification contract."""
     resolved_adoption_kind = adoption_kind or "unknown"
@@ -589,14 +591,48 @@ def render_initial_verification_contract(
         f"  - gate_source: {gate_source}",
         "  - last_updated_by: wf-start",
         "  - change_reason: initial verification contract",
-        "- Required Gates:",
     ]
+    if toolchain is not None and toolchain.configured:
+        lines.extend(
+            [
+                "- Toolchain Policy:",
+                f"  - build_tool: {toolchain.build_tool}",
+                f"  - test_tool: {_render_optional_tool(toolchain.test_tool)}",
+                f"  - default_working_directory: {toolchain.working_directory}",
+            ]
+        )
+        if toolchain.notes:
+            lines.append("  - notes:")
+            for note in toolchain.notes:
+                note_lines = note.splitlines() or [""]
+                lines.append(f"    - {note_lines[0]}")
+                lines.extend(f"      {continuation}" for continuation in note_lines[1:])
+    lines.append("- Required Gates:")
     lines.extend(_render_required_gates(resolved_template.required_gates))
     lines.append("- Conditional Gates:")
     lines.extend(_render_conditional_gates(resolved_template.conditional_gates))
     lines.append("- Manual Checks:")
     lines.extend(_render_manual_checks(resolved_template.manual_checks))
     return "\n".join(lines) + "\n"
+
+
+def _render_optional_tool(value: str | None) -> str:
+    if value is None or not value.strip():
+        return "none"
+    return value
+
+
+def verification_template_from_toolchain(toolchain: VerificationToolchain) -> VerificationGateTemplate:
+    """Project a configured repo-level toolchain into a task-local gate template.
+
+    Toolchain notes are rendered separately in the Toolchain Policy block.
+    """
+
+    return VerificationGateTemplate(
+        required_gates=list(toolchain.required_gates),
+        conditional_gates=list(toolchain.conditional_gates),
+        manual_checks=list(toolchain.manual_checks),
+    )
 
 
 def _render_required_gates(gates: list[VerificationGate]) -> list[str]:

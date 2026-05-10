@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import Iterable
 
 from harness.shared.contracts.actions import ArtifactAction, CurrentStepRefSnapshot
 from harness.shared.contracts.state import CurrentPhase, DeferredStateTransition, SessionState
@@ -36,6 +37,38 @@ class ApplyStatus(str, Enum):
     APPLIED = "APPLIED"
     NOOP = "NOOP"
     BLOCKED = "BLOCKED"
+
+
+class VerificationLintWarningCode(str, Enum):
+    """Non-blocking lint warning codes emitted by /wf-verify.
+
+    TEST_REPORT_SKILL_BYPASSED: a test/lint/build/static-analysis gate was summarized without
+    the `skill:test-report#verification-assist` basis marker.
+    AUTOFIX_COMMAND_RECORDED: verification recorded a formatter/apply command that should be a
+    user-directed cleanup, not an automatic /wf-verify gate.
+    """
+
+    TEST_REPORT_SKILL_BYPASSED = "VERIFY_TEST_REPORT_SKILL_BYPASSED"
+    AUTOFIX_COMMAND_RECORDED = "VERIFY_AUTOFIX_COMMAND_RECORDED"
+
+
+def normalize_verification_lint_warnings(
+    values: Iterable[str | VerificationLintWarningCode],
+) -> list[VerificationLintWarningCode]:
+    """Keep only known verification lint warning codes, preserving order."""
+
+    seen: set[VerificationLintWarningCode] = set()
+    result: list[VerificationLintWarningCode] = []
+    for value in values:
+        try:
+            code = VerificationLintWarningCode(value)
+        except ValueError:
+            continue
+        if code in seen:
+            continue
+        seen.add(code)
+        result.append(code)
+    return result
 
 
 @dataclass(slots=True)
@@ -102,6 +135,10 @@ class VerificationResult:
     stop_condition_code: str | None = None
     primary_cause_code: str | None = None
     reason_fingerprint: str | None = None
+    lint_warnings: list[VerificationLintWarningCode] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        self.lint_warnings = normalize_verification_lint_warnings(self.lint_warnings)
 
 
 @dataclass(slots=True)
